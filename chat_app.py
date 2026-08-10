@@ -10,9 +10,15 @@
 종합 프로젝트의 핵심 차이(실전 2와 다른 점): 생성 이후에도 채팅으로 계속
 수정을 요청할 수 있고, 수정 결과는 매번 같은 Notion 페이지에 반영된다
 (새 페이지를 만들지 않음). 활동지가 이미 만들어져 있는 상태에서 활동지에도
-영향을 주는 수정(주제/과목/학년/토론 쟁점/수업 흐름 변경)이면 활동지도
+영향을 주는 계획안 수정(주제/과목/학년/토론 쟁점/수업 흐름 변경)이면 활동지도
 자동으로 다시 만들어 Google Docs에 반영한다 — 판단 로직은
 edit_propagation.worksheet_needs_update() 참고.
+
+수정 요청이 채팅으로 들어오면 먼저 edit_propagation.classify_edit_target()으로
+"계획안 얘기"인지 "활동지 얘기"인지 구분한다("활동지"/"워크시트" 등의 키워드
+포함 여부로 판단, 활동지가 아직 없으면 항상 계획안으로 취급). 활동지를 직접
+겨냥한 수정(예: "활동지 난이도 낮춰줘")은 계획안을 건드리지 않고 활동지만
+다시 만들어 Google Docs에 반영한다.
 
 주의: 계획안/활동지 "생성" 자체는 LLM 호출이라(.env의 LLM_PROVIDER에 따라
 Claude 또는 네이버 클로바) 크레딧/사용량이 없으면 이 부분만 막힌다. 대화
@@ -23,7 +29,7 @@ import asyncio
 import streamlit as st
 
 from src.conversation import ConversationState, Phase
-from src.edit_propagation import worksheet_needs_update
+from src.edit_propagation import classify_edit_target, worksheet_needs_update
 from src.google_docs_writer import GoogleDocsWriteError, create_and_write_doc, replace_doc_body
 from src.lesson_plan import LessonPlanError, generate_lesson_plan
 from src.ncic_matcher import available_subjects
@@ -134,6 +140,48 @@ def _run_generation(revision_request: str | None = None) -> bool:
     return True
 
 
+def _run_worksheet_revision(revision_request: str) -> bool:
+    """활동지를 직접 겨냥한 수정 요청을 처리한다. 계획안/Notion은 건드리지 않는다.
+
+    이 함수는 항상 phase를 DRAFTED로 되돌리고 True를 반환해서 호출부가
+    바로 rerun한다 — _run_generation()과 달리 이 경로는 phase가 REVISING을
+    벗어나는 게 실패 여부와 무관해서(여기서 한 번만 실행되고 다시 자동으로
+    트리거되지 않음) 재시도 루프 위험이 없다. 다만 rerun이 바로 따라오므로
+    st.error() 같은 일시적 위젯 호출은 화면에 뜨기도 전에 사라진다 —
+    성공/실패 메시지 전부 conv.history에 남겨서(대화 기록에 남는 방식으로)
+    rerun 이후에도 보이게 한다.
+    """
+    conv.phase = Phase.DRAFTED
+    conv.slots.pop("revision_request", None)
+
+    if not conv.worksheet_doc_id:
+        # 예외 상황: 활동지를 아직 안 만들었는데 활동지 수정을 요청한 경우.
+        conv.history.append(
+            {
+                "role": "assistant",
+                "content": "아직 학생 활동지를 만들지 않았어요. 먼저 아래 '학생 활동지도 만들기' 버튼으로 만들어주세요.",
+            }
+        )
+        return True
+
+    try:
+        with st.spinner("학생 활동지를 수정하는 중..."):
+            new_worksheet = generate_worksheet(conv.draft, revision_request=revision_request)
+            replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
+    except WorksheetError as e:
+        conv.history.append({"role": "assistant", "content": str(e)})
+    except GoogleDocsWriteError as e:
+        conv.history.append({"role": "assistant", "content": f"Google Docs 반영에 실패했어요: {e}"})
+    except Exception as e:  # noqa: BLE001
+        conv.history.append({"role": "assistant", "content": f"활동지 수정 중 문제가 발생했어요: {e}"})
+    else:
+        conv.worksheet = new_worksheet
+        conv.history.append(
+            {"role": "assistant", "content": f"학생 활동지를 수정했어요: [{conv.worksheet_url}]({conv.worksheet_url})"}
+        )
+    return True
+
+
 # --- 대화창 ---
 for msg in conv.history:
     with st.chat_message(msg["role"]):
@@ -153,9 +201,14 @@ if conv.phase == Phase.READY:
     if _run_generation():
         st.rerun()
 
-# --- REVISING: 수정 요청 반영해서 재생성 (+ Notion/활동지 자동 동기화) ---
+# --- REVISING: 계획안 수정인지 활동지 수정인지 구분해서 처리 ---
 if conv.phase == Phase.REVISING:
-    if _run_generation(revision_request=conv.slots.get("revision_request")):
+    revision_request = conv.slots.get("revision_request", "")
+    target = classify_edit_target(revision_request, has_worksheet=bool(conv.worksheet_doc_id))
+    if target == "worksheet":
+        if _run_worksheet_revision(revision_request):
+            st.rerun()
+    elif _run_generation(revision_request=revision_request):
         st.rerun()
 
 # --- DRAFTED: 계획안(+ 있으면 활동지) 보여주고, 활동지 생성/재시작 액션 제공 ---
@@ -216,5 +269,6 @@ if conv.phase == Phase.DRAFTED and conv.draft:
     st.caption(
         "수정하고 싶은 점이 있으면 위 채팅창에 자유롭게 적어주세요 (예: '토론 쟁점을 3개로 줄여줘', "
         "'토론 시간을 20분으로 늘려줘'). 계획안 수정 결과는 Notion에, 활동지에 영향 있는 수정이면 "
-        "학생 활동지(Google Docs)에도 자동으로 반영돼요."
+        "학생 활동지(Google Docs)에도 자동으로 반영돼요. '활동지 난이도를 낮춰줘'처럼 메시지에 "
+        "'활동지'가 들어가면 계획안은 그대로 두고 활동지만 수정해요."
     )

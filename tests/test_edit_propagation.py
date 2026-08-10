@@ -1,4 +1,19 @@
-from src.edit_propagation import WORKSHEET_RELEVANT_FIELDS, worksheet_needs_update
+from src.edit_propagation import WORKSHEET_RELEVANT_FIELDS, classify_edit_target, worksheet_needs_update
+
+
+def test_classify_edit_target_defaults_to_plan_without_keywords():
+    assert classify_edit_target("토론 시간을 20분으로 늘려줘", has_worksheet=True) == "plan"
+
+
+def test_classify_edit_target_detects_worksheet_keyword():
+    assert classify_edit_target("활동지 난이도를 낮춰줘", has_worksheet=True) == "worksheet"
+    assert classify_edit_target("학생 활동 질문을 줄여줘", has_worksheet=True) == "worksheet"
+    assert classify_edit_target("워크시트 좀 더 쉽게 만들어줘", has_worksheet=True) == "worksheet"
+
+
+def test_classify_edit_target_always_plan_when_no_worksheet_exists():
+    # 활동지가 아직 없으면 "활동지" 키워드가 있어도 고칠 대상이 없으니 plan으로 취급.
+    assert classify_edit_target("활동지 난이도를 낮춰줘", has_worksheet=False) == "plan"
 
 
 def _plan(**overrides) -> dict:

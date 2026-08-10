@@ -1,14 +1,15 @@
 """수정 전파(edit-propagation) 판단 로직 — 종합 프로젝트 핵심 요구사항.
 
-수업계획안이 수정됐을 때 이미 만들어진 학생 활동지도 같이 고쳐야 하는지를
-판단한다. 별도 LLM 분류 단계("이 수정이 활동지에 영향을 주나요?")를 새로
-만드는 대신, worksheet.py의 프롬프트(_build_prompt)가 실제로 참고하는
-필드 목록과 정확히 같은 필드 집합을 비교해서 판단한다 — "활동지 생성에
-쓰이는 입력이 바뀌지 않았으면 활동지도 바뀔 이유가 없다"는 논리라서,
-LLM에게 다시 묻는 것보다 결정적이고 테스트하기 쉽다.
+두 가지를 판단한다:
+1. `classify_edit_target()` — 채팅으로 들어온 수정 요청이 수업계획안 얘기인지
+   학생 활동지 얘기인지 (README 15번에 적어뒀던 한계를 메우는 부분)
+2. `worksheet_needs_update()` — 수업계획안이 수정됐을 때 이미 만들어진 학생
+   활동지도 같이 고쳐야 하는지
 
-두 함수 모두 순수 함수(네트워크 호출 없음)라 chat_app.py의 오케스트레이션
-로직(어느 함수를 호출할지)과 분리해서 여기서 단위 테스트한다.
+둘 다 LLM을 새로 호출하는 분류 단계를 넣는 대신 규칙/필드 비교로 결정한다.
+이 프로젝트 전반의 방침("크레딧 없이도 핵심 로직은 검증 가능해야 한다",
+`worksheet_needs_update`가 원래 이렑게 설계된 이유와 동일)과 일관되고,
+순수 함수라 네트워크 없이 유닛 테스트로 완전히 검증할 수 있다.
 """
 from __future__ import annotations
 
@@ -16,6 +17,25 @@ from __future__ import annotations
 # 이 목록을 벗어난 필드(예: 평가_루브릭, 배경_읽기_자료)만 바뀐 경우는
 # 활동지를 다시 만들 필요가 없다.
 WORKSHEET_RELEVANT_FIELDS = ["topic", "subject", "grade", "토론_쟁점", "수업_흐름"]
+
+# 메시지에 이 중 하나라도 들어있으면 "활동지 얘기"로 분류한다. 완벽한 NLU가
+# 아니라 단순 키워드 매칭이라 "토론 쟁점도 줄이고 활동지 질문도 줄여줘"처럼
+# 계획안과 활동지를 한 메시지에서 동시에 언급하는 경우는 활동지 쪽으로만
+# 분류되고 계획안 쪽 요청은 반영되지 않는 한계가 있다 (알려진 단순화).
+_WORKSHEET_KEYWORDS = ["활동지", "학생 활동", "워크시트", "활동 자료"]
+
+
+def classify_edit_target(message: str, has_worksheet: bool) -> str:
+    """채팅 수정 요청이 "plan"(수업계획안) 얘기인지 "worksheet"(학생 활동지) 얘기인지 분류한다.
+
+    활동지가 아직 없으면(has_worksheet=False) 고칠 대상 자체가 없으니 항상
+    "plan"으로 분류한다 — 활동지를 아직 안 만들었는데 활동지 얘기를 하는
+    메시지는 여기서 분류할 게 아니라, 호출하는 쪽(chat_app.py)이 "아직
+    활동지가 없다"는 안내로 따로 처리한다.
+    """
+    if has_worksheet and any(kw in message for kw in _WORKSHEET_KEYWORDS):
+        return "worksheet"
+    return "plan"
 
 
 def worksheet_needs_update(old_plan: dict, new_plan: dict) -> bool:

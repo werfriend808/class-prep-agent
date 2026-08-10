@@ -322,6 +322,15 @@ python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없�
 
 이 판단에 따라 활동지 재생성이 필요하면 `worksheet.generate_worksheet()`을 다시 호출하고 `google_docs_writer.replace_doc_body()`로 같은 문서에 덮어씁니다. Notion 쪽은 판단 없이 항상 `update_lesson_plan_in_notion()`으로 같은 페이지를 업데이트합니다(계획안이 바뀌었다는 사실 자체는 항상 확정적이라 별도 판단이 필요 없습니다). 두 반영 모두 **사용자 확인 없이 자동으로 실행됩니다** — 이미 존재하는 문서를 최신 상태로 유지하는 것이 "일관성 유지"라는 요구사항의 취지에 더 맞는다고 판단했습니다(활동지 최초 생성처럼 "새 문서를 만들지 말지"와는 성격이 다른 결정이라고 봤습니다).
 
+### 13-3-1. 수정 대상 분류: 계획안 vs 활동지
+
+13-3의 설명은 "이 메시지는 계획안 수정 요청"이라고 이미 정해진 다음 얘기입니다. 그런데 실제로는 채팅 메시지가 계획안 얘기("토론 시간을 20분으로")일 수도, 활동지 얘기("활동지 난이도를 낮춰줘")일 수도 있습니다. 처음 버전에서는 이 구분이 아예 없어서 활동지를 겨냥한 요청도 전부 계획안 재생성 프롬프트로 들어갔는데(README 15번에 한계로 적어뒀던 부분), `edit_propagation.classify_edit_target()`을 추가해 메워뒀습니다.
+
+- 메시지에 "활동지"/"학생 활동"/"워크시트"/"활동 자료" 키워드가 있고, 활동지가 이미 만들어져 있으면 → 활동지 수정으로 분류하고 `worksheet.generate_worksheet(plan, revision_request=메시지)`만 다시 호출해 Google Docs에 반영합니다. 계획안/Notion은 건드리지 않습니다.
+- 그 외에는 전부 계획안 수정(13-3의 흐름)으로 처리합니다. 활동지가 아직 없으면 키워드가 있어도 무조건 계획안 쪽으로 처리합니다 — 고칠 활동지 자체가 없기 때문입니다(사용자가 "활동지 만들어줘"라고 채팅에 쳐도 버튼을 눌러야 실제로 생성됩니다 — 13-2에서 이미 채택한 원칙과 동일).
+
+여기서도 LLM 재분류 대신 키워드 매칭을 택한 이유는 13-3과 같습니다(크레딧 없이 검증 가능, 결정적, 테스트 쉬움). 다만 이건 필드 diff보다 훨씬 거친 방법이라 한계가 뚜렷합니다 — "쟁점도 줄이고 활동지 질문도 줄여줘"처럼 계획안과 활동지를 한 메시지에서 동시에 언급하면 활동지 쪽으로만 분류되고 계획안 쪽 요청은 반영되지 않습니다. 이 한계는 15번에 그대로 남겨뒀습니다.
+
 ### 13-4. 부수적으로 고친 버그
 
 이 작업을 하며 실전 2 코드에 있던 버그 하나를 같이 고쳤습니다: `chat_app.py`가 계획안 생성 실패 여부와 무관하게 `st.rerun()`을 무조건 호출하고 있어서, 실패 메시지가 사용자에게 보이기도 전에 화면이 다시 그려지고 상태가 그대로면 곧바로 재시도가 반복될 수 있었습니다. 종합 프로젝트에서는 생성 성공 시 Notion/Google Docs 쓰기까지 함께 일어나므로 이 재시도 루프가 훨씬 위험해져서(실패한 시도마다 외부 서비스에 불필요한 요청이 반복될 수 있음) 이번에 `_run_generation()`이 성공 여부를 반환하도록 고치고, 호출부는 성공했을 때만 rerun하도록 바꿨습니다.
@@ -334,7 +343,8 @@ python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없�
 |---|---|
 | 슬롯(과목/학년/주제) 다 채움 | `lesson_plan.generate_lesson_plan()` → `notion_writer.save_lesson_plan_to_notion()` |
 | "활동지도 만들기" 버튼 | `worksheet.generate_worksheet()` → `google_docs_writer.create_and_write_doc()` |
-| 초안/저장된 계획안에 수정 요청 | `lesson_plan.generate_lesson_plan(revision_request=...)` → `notion_writer.update_lesson_plan_in_notion()` → (활동지 존재 + 관련 필드 변경 시) `worksheet.generate_worksheet()` → `google_docs_writer.replace_doc_body()` |
+| 채팅 수정 요청 (계획안 대상, `classify_edit_target()`이 "plan" 판정) | `lesson_plan.generate_lesson_plan(revision_request=...)` → `notion_writer.update_lesson_plan_in_notion()` → (활동지 존재 + 관련 필드 변경 시) `worksheet.generate_worksheet()` → `google_docs_writer.replace_doc_body()` |
+| 채팅 수정 요청 (활동지 대상, `classify_edit_target()`이 "worksheet" 판정) | `worksheet.generate_worksheet(plan, revision_request=...)` → `google_docs_writer.replace_doc_body()` (계획안/Notion 미변경) |
 
 ## 14. 프로젝트 구조 (종합 프로젝트 추가분)
 
@@ -342,7 +352,7 @@ python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없�
 src/
   worksheet.py               # 학생 활동지 생성 (lesson_plan.py와 같은 패턴, 계획안 dict를 입력으로 받음)
   google_docs_writer.py      # Google Docs REST API 연동 (OAuth Desktop flow, 문서 생성/전체 교체 쓰기)
-  edit_propagation.py        # 계획안 수정이 활동지에도 영향을 주는지 판단하는 순수 함수
+  edit_propagation.py        # 수정 요청이 계획안/활동지 중 어디를 겨냥한 것인지 + 계획안 수정이 활동지에도 영향을 주는지 판단하는 순수 함수
   notion_writer.py           # (기존 파일에 update_lesson_plan_in_notion 추가 — 같은 페이지 업데이트용)
   conversation.py            # (기존 파일에 notion_page_id/worksheet 관련 상태 필드 추가)
 scripts/
@@ -356,7 +366,7 @@ tests/
 ## 15. 알려진 제한사항
 
 - **PBL/Quiz Activity는 미구현입니다.** 과제 스펙이 "최소 1개 이상 완성도 있게 구현"을 권장해서, 토의·토론 하나를 생성+수정+외부 서비스 반영까지 끝까지 완성하는 쪽을 택했습니다. Activity 선택 화면(여러 Activity 중 고르는 UI)도 같은 이유로 아직 없습니다.
-- **수정 요청이 계획안용인지 활동지용인지 구분하지 않습니다.** 지금은 초안/저장된 계획안 단계에서 들어오는 모든 채팅 메시지를 "계획안 수정 요청"으로만 해석합니다(`conversation.py`의 기존 상태 기계 구조를 그대로 재사용했기 때문). 그래서 "활동지 난이도를 낮춰줘"처럼 활동지를 직접 겨냥한 요청도 계획안 재생성 프롬프트로 들어가게 되고, 그 결과가 우연히 `WORKSHEET_RELEVANT_FIELDS`(13-3 참고)를 건드려야만 활동지에 반영됩니다. "이 메시지가 계획안 얘기인지 활동지 얘기인지" 자체를 분류하는 단계가 없다는 게 정확한 한계이고, 다음으로 손볼 부분으로 남겨뒀습니다.
+- **수정 대상 분류(계획안 vs 활동지, 13-3-1 참고)가 키워드 매칭이라 거칩니다.** "활동지"/"학생 활동"/"워크시트"/"활동 자료" 키워드로만 판단해서, 두 대상을 한 메시지에 같이 언급하면("쟁점도 줄이고 활동지 질문도 줄여줘") 활동지 쪽으로만 분류되고 계획안 쪽 요청은 무시됩니다. 메시지를 한 번에 하나의 대상만 겨냥하도록 쓰면(현재 UI 안내 문구가 이렇게 유도합니다) 문제없이 동작합니다.
 - **Google Docs 활동지는 서식이 없는 순수 텍스트입니다.** Docs API의 `insertText`가 마크다운을 렌더링하지 않아서, 제목/구분선을 굵게·크게 표시하는 등의 서식(`updateTextStyle` 등 추가 batchUpdate 요청)은 아직 넣지 않았습니다.
 - Google Docs 연동은 실전 1·2의 "크레딧 없이 개발" 방침과 별개로 **본인 Google 계정의 OAuth 인증과 Drive 저장 공간**이 필요합니다(12번 참고) — 비용은 들지 않지만 계정 설정이 한 단계 더 필요합니다.
 
