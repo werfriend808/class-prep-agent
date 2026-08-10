@@ -7,6 +7,15 @@ load_dotenv()
 NOTION_API_KEY = os.getenv("NOTION_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
+# 실전 프로젝트 2 계획안 생성(lesson_plan.py)에서만 쓰는 LLM provider 선택.
+# "anthropic"(기본값) | "clova". 실전 1의 요약/질의분류는 이 설정과 무관하게
+# 항상 Claude(ANTHROPIC_API_KEY)를 쓴다 — 이미 검증된 경로라 건드리지 않았다.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
+# 네이버 클로바 스튜디오(HyperCLOVA X) API 키. 클로바 스튜디오 콘솔에서 발급.
+# OpenAI 호환 엔드포인트(https://clovastudio.stream.ntruss.com/v1/openai/)로 호출한다.
+HCX_API_KEY = os.getenv("HCX_API_KEY", "")
+HCX_MODEL = os.getenv("HCX_MODEL", "HCX-005")
+
 # FILTER 유형 검색(학년/과목/날짜/학기)에 쓸 "수업 자료" 데이터소스(데이터베이스) ID.
 # notion-mcp-server의 search 또는 retrieve-a-database tool로 샘플 데이터셋을
 # 한 번 조회해서 값을 채워 넣는다. TOPIC/TITLE 검색에는 필요 없다.
@@ -26,6 +35,12 @@ if not ANTHROPIC_API_KEY:
     print(
         "[경고] ANTHROPIC_API_KEY가 .env에 없습니다. "
         "요약 기능(summarizer)을 쓰려면 .env에 키를 추가하세요."
+    )
+
+if LLM_PROVIDER == "clova" and not HCX_API_KEY:
+    print(
+        "[경고] LLM_PROVIDER=clova인데 HCX_API_KEY가 .env에 없습니다. "
+        "수업계획안 생성(lesson_plan)이 실패합니다."
     )
 
 # 요약에 사용할 Claude 모델

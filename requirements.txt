@@ -3,3 +3,4 @@ anthropic>=0.40
 mcp>=1.2
 python-dotenv>=1.0
 pytest>=8.0
+openai>=1.0  # 실전 2 계획안 생성에서 LLM_PROVIDER=clova로 네이버 클로바 스튜디오(OpenAI 호환 API)를 쓸 때 필요

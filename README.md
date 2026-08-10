@@ -52,7 +52,7 @@ streamlit run app.py
 python -m pytest
 ```
 
-`tests/`에는 실전 1·2 테스트가 함께 들어있어 `python -m pytest` 한 번으로 전부(현재 65개) 실행됩니다. 네트워크나 API 키 없이도 통과하는 순수 로직 테스트(필터 변환, MCP 응답 파싱, 폴백 처리, 대화 상태 전이 등)로만 구성되어 있습니다.
+`tests/`에는 실전 1·2 테스트가 함께 들어있어 `python -m pytest` 한 번으로 전부(현재 72개) 실행됩니다. 네트워크나 API 키 없이도 통과하는 순수 로직 테스트(필터 변환, MCP 응답 파싱, 폴백 처리, 대화 상태 전이 등)로만 구성되어 있습니다.
 
 ## 3. MCP 연동 방식
 
@@ -150,16 +150,17 @@ tests/                    # 실전 1 관련 순수 로직 단위 테스트 (실�
 
 ## 7. 실행 방법
 
-실전 1과 사전 준비물(Python, Node.js/npx, Notion Integration, Claude API 키)이 동일하고, 추가로 아래가 필요합니다.
+실전 1과 사전 준비물(Python, Node.js/npx, Notion Integration)이 동일하고, 추가로 아래가 필요합니다.
 
 - 생성된 수업계획안 페이지를 넣을 Notion 부모 페이지 하나를 만들고, 같은 Integration에 Connections로 연결
 - `.env`에 그 페이지 ID를 `NOTION_LESSON_PLAN_PARENT_ID`로 추가 (`.env.example` 참고, 페이지 URL의 32자리 값을 8-4-4-4-12로 나눠 하이픈을 넣으면 됨)
+- 계획안 생성에 쓸 LLM 하나: `ANTHROPIC_API_KEY`(Claude, 기본값) 또는 `LLM_PROVIDER=clova` + `HCX_API_KEY`(네이버 클로바 스튜디오) — 아래 8-5 참고
 
 ```bash
 streamlit run chat_app.py
 ```
 
-과목→주제를 묻는 질문에 답하는 대화 흐름과 Notion 저장은 크레딧 없이도 확인할 수 있습니다. "계획안을 만드는 중..." 단계(Claude API 호출)만 크레딧이 필요합니다.
+과목→주제를 묻는 질문에 답하는 대화 흐름과 Notion 저장은 크레딧/사용량과 무관하게 확인할 수 있습니다. "계획안을 만드는 중..." 단계만 LLM 호출량이 필요합니다.
 
 ## 8. MCP 연동 방식
 
@@ -176,7 +177,7 @@ conversation.ConversationState   ──▶  과목 → 주제 순서로 슬롯 �
 ncic_matcher.match_standards()   ──▶  과목/키워드로 NCIC 성취기준 검색
    │                                   (ncic_standards/go1_common_subjects.json)
    ▼
-lesson_plan.generate_lesson_plan() ──▶  Claude API로 8개 섹션 JSON 생성
+lesson_plan.generate_lesson_plan() ──▶  LLM(Claude 또는 클로바)로 8개 섹션 JSON 생성
    │                                     (NCIC 인용은 LLM이 아니라 위 매칭 결과를 그대로 붙임)
    ▼
 notion_writer.save_lesson_plan_to_notion() ──▶  MCP로 페이지 생성 + 마크다운 본문 작성
@@ -213,7 +214,15 @@ chat_app.py (Streamlit)          ──▶  채팅 UI + 초안 표시 + "Notion�
 
 `conversation.ConversationState`가 과목 → 주제 순서로 정보를 모으고(규칙 기반 키워드 매칭, Claude API 불필요), 다 모이면 `lesson_plan.generate_lesson_plan()`을 호출해 초안을 만듭니다. 초안이 나온 뒤 채팅창에 입력하는 내용은 전부 "수정 요청"으로 간주해 재생성합니다(저장/승낙 의사는 버튼으로 별도 처리 — 자유 텍스트로 "괜찮아요" 같은 승낙 문구까지 규칙으로 구분하면 오탐이 잦아서 분리했습니다).
 
-이 방식을 택한 이유는 정보 수집 단계를 규칙 기반으로 처리할 수 있어 Claude API 크레딧 없이도 대화 흐름 자체는 끝까지 테스트할 수 있었기 때문입니다 (실제 "생성" 한 걸음만 크레딧이 필요).
+이 방식을 택한 이유는 정보 수집 단계를 규칙 기반으로 처리할 수 있어 Claude API 크레딧 없이도 대화 흐름 자체는 끝까지 테스트할 수 있었기 때문입니다 (실제 "생성" 한 걸음만 LLM 호출이 필요).
+
+### 8-5. LLM provider 전환: Claude ↔ 네이버 클로바 스튜디오
+
+Claude 크레딧 없이 실제 생성 결과를 검증하기 위해, `lesson_plan.py`만 provider를 바꿔 쓸 수 있게 했습니다 (실전 1의 요약/질의분류는 이미 검증된 Claude 경로라 그대로 둠). `.env`의 `LLM_PROVIDER=clova` + `HCX_API_KEY`를 설정하면 `src/llm.py`의 `complete()`가 네이버 클로바 스튜디오(HyperCLOVA X)로 요청을 보냅니다.
+
+클로바 스튜디오는 OpenAI 호환 엔드포인트(`https://clovastudio.stream.ntruss.com/v1/openai/`)를 제공해서, 커스텀 HTTP 클라이언트를 새로 짤 필요 없이 `openai` 파이썬 SDK에 `base_url`만 바꿔서 그대로 재사용했습니다.
+
+**실제 클로바 생성 결과로 발견한 버그:** 프롬프트에 "각 값은 문자열로 작성"이라고 명시했는데도, 클로바는 일부 섹션(핵심 개념, 평가 루브릭 등)을 문자열 대신 리스트나 중첩 딕셔너리로 반환하는 경우가 있었습니다(`scripts/verify_lesson_plan_generation.py`로 실제 확인). 그대로 두면 Notion 본문에 `['산업화', '환경오염']` 같은 파이썬 문법이 그대로 노출됩니다 — `lesson_plan._stringify_section()`이 리스트는 글머리 기호 목록으로, 딕셔너리는 `키: 값` 목록으로 정규화하도록 고쳤습니다.
 
 ## 9. 프로젝트 구조 (실전 2 추가분)
 
@@ -222,26 +231,30 @@ chat_app.py                    # Streamlit 진입점 (챗봇 UI)
 src/
   conversation.py              # 멀티턴 대화 상태 관리 (과목/주제 슬롯 채우기, 수정 요청 처리)
   ncic_matcher.py               # NCIC 성취기준 검색 (과목 + 키워드 매칭)
-  lesson_plan.py                # Claude API로 8개 섹션 수업계획안 생성
+  lesson_plan.py                # LLM으로 8개 섹션 수업계획안 생성 (응답 정규화 포함)
   notion_writer.py              # Notion 페이지 생성 + 마크다운 본문 작성 (MCP 쓰기)
+  llm.py                        # Claude/클로바 공용 LLM 호출 어댑터 (complete())
 ncic_standards/
   go1_common_subjects.json      # 고1 공통 과목 성취기준 157건 (국어/수학/영어/사회)
   README.md                     # 데이터 출처, 스키마, 파싱 방법, 알려진 한계
 scripts/
-  verify_notion_write.py        # Claude API 없이 Notion 쓰기만 수동 검증하는 스크립트
+  verify_notion_write.py        # LLM 없이 Notion 쓰기만 수동 검증하는 스크립트
   debug_notion_tools.py         # MCP tool의 실제 입력 스키마를 확인하는 진단 스크립트
+  verify_lesson_plan_generation.py  # 실제 LLM 호출로 계획안 생성 결과를 확인하는 스크립트
 tests/
   test_conversation.py          # 대화 상태 전이 테스트
   test_ncic_matcher.py          # NCIC 매칭 로직 테스트
-  test_lesson_plan.py           # 프롬프트 구성/응답 파싱 테스트 (Claude 호출은 가짜 클라이언트로 대체)
+  test_lesson_plan.py           # 프롬프트 구성/응답 파싱/정규화 테스트 (LLM 호출은 가짜 함수로 대체)
   test_notion_writer.py         # 마크다운 변환/에러 감지 테스트
+  test_llm.py                   # Claude/클로바 provider 분기 테스트
 ```
 
 ## 10. 알려진 제한사항
 
-- **계획안 생성 자체를 실제 Claude 응답으로는 아직 검증 못했습니다.** 코드 경로(`lesson_plan.py`)는 가짜 클라이언트로 단위 테스트했지만, 크레딧이 없어 진짜 생성 결과의 품질은 확인하지 못한 상태입니다. 크레딧 충전 후 확인 예정.
+- **실제 생성 결과는 클로바(HyperCLOVA X)로 검증했고, Claude로는 아직 검증 못했습니다.** 코드 경로는 provider에 무관하게 동일하고(`llm.complete()`로 추상화), 클로바로 8개 섹션이 모두 정상적으로 생성되는 것을 확인했습니다. Claude 크레딧을 충전하면 `LLM_PROVIDER`를 비우고 같은 방식으로 확인하면 됩니다.
 - NCIC 데이터셋이 고1 공통 과목(국어/수학/영어/사회)으로 한정되어 있습니다. 다른 학년·선택과목 주제를 물으면 관련 성취기준이 없을 수 있습니다 (`ncic_standards/README.md` 참고).
 - `ncic_standards/go1_common_subjects.json`은 PDF 텍스트 추출로 만들어져서, 수식이 이미지로 삽입된 일부 성취기준(예: 수학 함수 그래프 관련 문항)은 텍스트가 빠져 있을 수 있습니다.
+- LLM이 섹션 값을 문자열이 아닌 리스트/딕셔너리로 반환하는 경우가 있어 `_stringify_section()`으로 정규화합니다(8-5 참고). 아주 깊게 중첩된 구조가 오면 완벽하게 예쁜 포맷은 아닐 수 있습니다.
 
 ---
 
