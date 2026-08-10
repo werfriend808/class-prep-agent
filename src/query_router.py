@@ -13,7 +13,8 @@
     그래서 이 모듈은 하이브리드로 동작한다:
     1) 학년/과목/날짜 후보값은 항상 규칙 기반(정규식)으로 뽑아서 FILTER 검색에
        바로 쓸 수 있게 만들어둔다.
-    2) TOPIC/TITLE/FILTER 중 최종 유형 판단은 Claude API에 위임한다.
+    2) TOPIC/TITLE/FILTER 중 최종 유형 판단은 LLM(llm.complete(), .env의
+       LLM_PROVIDER에 따라 Claude 또는 네이버 클로바)에 위임한다.
     3) API 키가 없거나 호출이 실패하면 `_heuristic_classify`로 안전하게
        degrade한다 (네트워크 없이도 테스트 가능하도록).
 """
@@ -24,8 +25,7 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 
-from .config import SUMMARY_MODEL
-from .llm import get_client
+from .llm import complete
 
 
 class QueryType(str, Enum):
@@ -167,7 +167,6 @@ def _heuristic_classify(query: str, filters: dict[str, str]) -> QueryType:
 
 
 def _llm_classify(query: str, filters: dict[str, str]) -> QueryType:
-    client = get_client()
     prompt = f"""다음은 사용자가 Notion 수업 자료를 찾기 위해 입력한 검색 질의입니다.
 아래 세 가지 유형 중 하나로 분류하세요.
 
@@ -184,12 +183,7 @@ def _llm_classify(query: str, filters: dict[str, str]) -> QueryType:
 반드시 아래 JSON 형식으로만 답하세요. 다른 말은 하지 마세요.
 {{"type": "topic" | "title" | "filter"}}
 """
-    message = client.messages.create(
-        model=SUMMARY_MODEL,
-        max_tokens=20,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = message.content[0].text.strip()
+    text = complete(prompt, max_tokens=20).strip()
     try:
         parsed = json.loads(text)
         return QueryType(parsed["type"])
@@ -203,8 +197,9 @@ def classify_query(query: str) -> ParsedQuery:
     try:
         query_type = _llm_classify(query, filters)
     except Exception:
-        # ANTHROPIC_API_KEY가 없거나(RuntimeError), 키가 유효하지 않거나,
-        # 네트워크 문제로 API 호출이 실패하는 경우 등 — 어떤 이유로든 LLM
-        # 분류가 안 되면 규칙 기반 폴백으로 서비스가 죽지 않게 한다.
+        # API 키(ANTHROPIC_API_KEY 또는 HCX_API_KEY)가 없거나(RuntimeError),
+        # 키가 유효하지 않거나, 네트워크 문제로 API 호출이 실패하는 경우 등 —
+        # 어떤 이유로든 LLM 분류가 안 되면 규칙 기반 폴백으로 서비스가 죽지
+        # 않게 한다.
         query_type = _heuristic_classify(query, filters)
     return ParsedQuery(query_type=query_type, raw_query=query, filters=filters)

@@ -1,16 +1,17 @@
 """LLM 클라이언트 공용 헬퍼.
 
-`get_client()`는 기존 그대로 Claude(anthropic) 전용이며 summarizer.py /
-query_router.py가 쓴다 — 실전 1은 이미 검증된 경로라 건드리지 않았다.
-
-`complete()`는 실전 프로젝트 2의 lesson_plan.py에서만 쓰는 provider-무관
-공통 인터페이스다. `.env`의 `LLM_PROVIDER`가 "clova"면 네이버 클로바
-스튜디오(HyperCLOVA X)의 OpenAI 호환 엔드포인트
-(https://clovastudio.stream.ntruss.com/v1/openai/)로, 그 외(기본값
+`complete()`가 프로젝트 전체(실전 1의 summarizer.py/query_router.py + 실전 2의
+lesson_plan.py)가 공통으로 쓰는 provider-무관 인터페이스다. `.env`의
+`LLM_PROVIDER`가 "clova"면 네이버 클로바 스튜디오(HyperCLOVA X)의 OpenAI 호환
+엔드포인트(https://clovastudio.stream.ntruss.com/v1/openai/)로, 그 외(기본값
 "anthropic")에는 Claude API로 보낸다. 클로바가 OpenAI 파이썬 SDK와 호환되는
 REST API를 제공해서, 커스텀 HTTP 클라이언트를 새로 짤 필요 없이 `openai`
 패키지 하나로 붙일 수 있었다 (openai 패키지는 clova 경로를 쓸 때만 필요하도록
 함수 안에서 지연 import한다 — 기본 Claude 경로만 쓰는 사람은 설치 안 해도 됨).
+
+`get_client()`는 Claude 전용 저수준 클라이언트로, `complete()`가 내부적으로
+쓴다. 과거엔 summarizer.py/query_router.py가 이걸 직접 썼지만, 지금은 모두
+`complete()`를 통해 provider 설정을 따르도록 통일했다.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ _clova_client = None  # openai.OpenAI, 지연 import
 
 
 def get_client() -> anthropic.Anthropic:
-    """Claude 클라이언트 (summarizer.py / query_router.py 전용, 기존과 동일)."""
+    """Claude 클라이언트 (complete()가 Claude provider일 때 내부적으로 씀)."""
     global _anthropic_client
     if _anthropic_client is None:
         if not ANTHROPIC_API_KEY:

@@ -17,7 +17,7 @@
 
 1. 질의를 주제/키워드, 제목 정확 매칭, 속성 필터(학년·과목·날짜) 세 유형 중 하나로 분류하고
 2. Notion MCP 서버를 통해 워크스페이스를 검색하거나 속성으로 필터링하고
-3. 찾은 각 페이지의 본문을 조회해 Claude API로 요약한 뒤
+3. 찾은 각 페이지의 본문을 조회해 LLM(Claude 또는 네이버 클로바)으로 요약한 뒤
 4. 검색창 + 결과 카드 리스트(제목/태그/요약/Notion 링크) 형태로 보여줍니다.
 
 ## 2. 실행 방법
@@ -26,7 +26,7 @@
 - Python 3.10+
 - Node.js / npx (`node -v`로 확인, LTS 권장) — Notion MCP 서버(`@notionhq/notion-mcp-server`)를 npx로 구동하기 위해 필요
 - Notion Internal Integration 토큰 (https://www.notion.so/my-integrations 에서 발급, 검색 대상 페이지에 Connections로 연결까지 완료)
-- Claude API 키 (https://console.anthropic.com 에서 발급, 계정에 크레딧 필요)
+- 요약/질의분류/계획안 생성에 쓸 LLM 키 하나: `ANTHROPIC_API_KEY`(Claude, https://console.anthropic.com 에서 발급, 계정에 크레딧 필요) 또는 `LLM_PROVIDER=clova` + `HCX_API_KEY`(네이버 클로바 스튜디오) — 아래 8-5 참고. 둘 다 없어도 앱은 실행되고, 요약/분류/계획안 생성만 규칙 기반 폴백 또는 오류 메시지로 대체됩니다.
 
 **설치 및 실행**
 
@@ -38,7 +38,7 @@ pip install -r requirements.txt
 
 ```
 NOTION_API_KEY=ntn_...                  # Notion Internal Integration 토큰
-ANTHROPIC_API_KEY=sk-ant-...            # Claude API 키
+ANTHROPIC_API_KEY=sk-ant-...            # Claude API 키 (LLM_PROVIDER=clova면 대신 HCX_API_KEY 사용)
 NOTION_DATA_SOURCE_ID=...               # FILTER(학년/과목/날짜) 검색에 필요, 아래 3-2 참고
 ```
 
@@ -69,7 +69,7 @@ mcp_client.NotionMCPClient       ──▶  npx로 notion-mcp-server 프로세�
    (stdio 기반 MCP 클라이언트)          stdio로 통신 (Model Context Protocol)
    │
    ▼
-pipeline.search_and_summarize() ──▶  검색/필터 → 페이지 본문 조회 → Claude 요약
+pipeline.search_and_summarize() ──▶  검색/필터 → 페이지 본문 조회 → LLM 요약
    │
    ▼
 app.py (Streamlit)               ──▶  검색창 + 결과 카드 리스트 UI
@@ -108,11 +108,11 @@ Notion의 `search` API는 의미 기반 검색이 아니라 단순 텍스트 매
 
 ### 3-4. 질의 유형 분류: LLM + 규칙 기반 하이브리드
 
-`query_router.classify_query()`는 먼저 Claude API에 유형 판단을 맡기고, API 호출이 실패하면(키 없음, 크레딧 부족, 네트워크 오류 등) `_heuristic_classify()`로 자동 폴백합니다. 학년/과목/날짜/학기 속성 후보는 항상 정규식으로 먼저 뽑아두고, FILTER 유형일 때 이 값을 Notion filter 조건으로 변환합니다.
+`query_router.classify_query()`는 먼저 LLM(`llm.complete()`, provider는 `.env`의 `LLM_PROVIDER`를 따름)에 유형 판단을 맡기고, 호출이 실패하면(키 없음, 크레딧 부족, 네트워크 오류 등) `_heuristic_classify()`로 자동 폴백합니다. 학년/과목/날짜/학기 속성 후보는 항상 정규식으로 먼저 뽑아두고, FILTER 유형일 때 이 값을 Notion filter 조건으로 변환합니다.
 
 ### 3-5. 요약 실패 시 폴백
 
-Claude API 호출이 실패해도(크레딧 부족 등) 검색 자체는 확인할 수 있도록, `pipeline._summarize_or_fallback()`이 실패 시 AI 요약 대신 페이지 본문 앞부분을 그대로 보여줍니다.
+LLM 호출이 실패해도(크레딧 부족 등) 검색 자체는 확인할 수 있도록, `pipeline._summarize_or_fallback()`이 실패 시 AI 요약 대신 페이지 본문 앞부분을 그대로 보여줍니다.
 
 ## 4. 프로젝트 구조
 
@@ -123,15 +123,15 @@ src/
   mcp_client.py           # Notion MCP 클라이언트 (stdio, npx로 서버 구동)
   query_router.py         # 질의 유형 분류(TOPIC/TITLE/FILTER) + 검색어 정제
   pipeline.py             # 검색 → 조회 → 요약 오케스트레이션
-  summarizer.py           # Claude API 요약
-  llm.py                  # Claude API 클라이언트 공용 헬퍼
+  summarizer.py           # LLM 요약 (llm.complete() 사용)
+  llm.py                  # Claude/클로바 공용 LLM 호출 어댑터 (complete())
 golden_set/queries.md     # 실제 샘플 데이터셋 기준 질의 유형별 테스트 케이스
 tests/                    # 실전 1 관련 순수 로직 단위 테스트 (실전 2 테스트는 9번 참고, 합쳐서 python -m pytest 한 번에 실행)
 ```
 
 ## 5. 알려진 제한사항
 
-- Claude API 계정에 크레딧이 없으면 요약은 폴백(원문 일부)으로 표시됩니다. 정상적인 AI 요약을 보려면 https://platform.claude.com/settings/billing 에서 크레딧을 충전해야 합니다.
+- 사용 중인 LLM provider(Claude 또는 클로바)에 크레딧/사용량이 없으면 요약은 폴백(원문 일부)으로 표시됩니다. Claude를 쓰려면 https://platform.claude.com/settings/billing 에서 크레딧을 충전하거나, `.env`에서 `LLM_PROVIDER=clova`로 전환해 네이버 클로바 스튜디오 키를 쓸 수 있습니다 (아래 8-5 참고).
 - `notion-mcp-server`는 호출마다 매번 새 프로세스를 띄우는 구조가 아니라 `NotionMCPClient.session()`으로 세션을 한 번 열어 여러 tool을 재사용하도록 되어 있지만, 검색 1건당 여전히 npx 프로세스 기동 비용이 있어 처음 실행 시 다소 느립니다.
 - 과목 태그 표기가 데이터셋 내에서 일관되지 않습니다(예: "통합사회" vs "통합 사회1"). `golden_set/queries.md`의 "노이즈/예외 케이스"에 정리되어 있습니다.
 
@@ -144,7 +144,7 @@ tests/                    # 실전 1 관련 순수 로직 단위 테스트 (실�
 챗봇 창에 과목을 물으면 답하고, 주제를 물으면 답하는 식으로 순차 대화를 몇 번 주고받으면:
 
 1. 과목/학년/주제 정보를 바탕으로 `ncic_standards/`에서 관련 성취기준을 찾고
-2. Claude API로 8개 섹션(자료 개요, 수업 목표, 배경 읽기 자료, 핵심 개념, 토론 쟁점, 수업 흐름, 학생 활동지 예시, 평가 루브릭)짜리 토의·토론 수업계획안을 생성하고
+2. LLM(Claude 또는 네이버 클로바)로 8개 섹션(자료 개요, 수업 목표, 배경 읽기 자료, 핵심 개념, 토론 쟁점, 수업 흐름, 학생 활동지 예시, 평가 루브릭)짜리 토의·토론 수업계획안을 생성하고
 3. 화면에 초안을 보여주면서 자유 텍스트로 수정 요청("토론 쟁점을 3개로 줄여줘")을 받아 재생성하고
 4. "Notion에 저장" 버튼을 누르면 MCP로 실제 Notion 페이지를 만들어 링크를 돌려줍니다.
 
@@ -202,7 +202,7 @@ chat_app.py (Streamlit)          ──▶  채팅 UI + 초안 표시 + "Notion�
 1. **처음엔 `type` 없이 `markdown` 필드만 보내서 검증 에러가 났습니다.** 실제 스키마는 `markdown`이 아니라 `type` + `replace_content: {"new_str": "..."}` 형태를 요구합니다.
 2. **notion-mcp-server는 Notion API 검증 에러가 나도 MCP `isError` 플래그를 True로 세팅하지 않습니다.** 에러가 `content[0].text` 안에 `{"object":"error","status":400,...}` 형태의 JSON으로만 실려 옵니다. 그래서 `isError`만 확인하면 실패를 놓칩니다 — 실제로 이것 때문에 페이지는 생성되는데 본문은 계속 비어있는 채로 스크립트가 "성공"이라고 출력했습니다. `notion_writer._raise_if_tool_error()`가 `isError`와 응답 JSON의 `object == "error"` 둘 다 확인하도록 고쳐서 해결했습니다.
 
-이 두 버그는 `scripts/verify_notion_write.py`(Claude API 없이 가짜 계획안으로 Notion 쓰기만 검증)로 실제 발견하고 고쳤습니다 — Claude 크레딧이 없어도 이 경로는 크레딧과 무관해서 미리 검증할 수 있었습니다.
+이 두 버그는 `scripts/verify_notion_write.py`(LLM 호출 없이 가짜 계획안으로 Notion 쓰기만 검증)로 실제 발견하고 고쳤습니다 — LLM 크레딧이 없어도 이 경로는 크레딧과 무관해서 미리 검증할 수 있었습니다.
 
 ### 8-3. NCIC 활용 방식: 단순 키워드 매칭 (RAG·벡터DB 아님)
 
@@ -214,11 +214,11 @@ chat_app.py (Streamlit)          ──▶  채팅 UI + 초안 표시 + "Notion�
 
 `conversation.ConversationState`가 과목 → 주제 순서로 정보를 모으고(규칙 기반 키워드 매칭, Claude API 불필요), 다 모이면 `lesson_plan.generate_lesson_plan()`을 호출해 초안을 만듭니다. 초안이 나온 뒤 채팅창에 입력하는 내용은 전부 "수정 요청"으로 간주해 재생성합니다(저장/승낙 의사는 버튼으로 별도 처리 — 자유 텍스트로 "괜찮아요" 같은 승낙 문구까지 규칙으로 구분하면 오탐이 잦아서 분리했습니다).
 
-이 방식을 택한 이유는 정보 수집 단계를 규칙 기반으로 처리할 수 있어 Claude API 크레딧 없이도 대화 흐름 자체는 끝까지 테스트할 수 있었기 때문입니다 (실제 "생성" 한 걸음만 LLM 호출이 필요).
+이 방식을 택한 이유는 정보 수집 단계를 규칙 기반으로 처리할 수 있어 LLM 크레딧 없이도 대화 흐름 자체는 끝까지 테스트할 수 있었기 때문입니다 (실제 "생성" 한 걸음만 LLM 호출이 필요).
 
 ### 8-5. LLM provider 전환: Claude ↔ 네이버 클로바 스튜디오
 
-Claude 크레딧 없이 실제 생성 결과를 검증하기 위해, `lesson_plan.py`만 provider를 바꿔 쓸 수 있게 했습니다 (실전 1의 요약/질의분류는 이미 검증된 Claude 경로라 그대로 둠). `.env`의 `LLM_PROVIDER=clova` + `HCX_API_KEY`를 설정하면 `src/llm.py`의 `complete()`가 네이버 클로바 스튜디오(HyperCLOVA X)로 요청을 보냅니다.
+Claude 크레딧 없이 실제 생성 결과를 검증하기 위해, LLM을 쓰는 모든 기능(실전 1의 요약 `summarizer.py` + 질의분류 `query_router.py`, 실전 2의 계획안 생성 `lesson_plan.py`)이 `src/llm.py`의 `complete(prompt, max_tokens)` 하나만 거치도록 통일했습니다. `.env`의 `LLM_PROVIDER=clova` + `HCX_API_KEY`를 설정하면 이 세 기능 전부 네이버 클로바 스튜디오(HyperCLOVA X)로 요청을 보내고, 비워두면(기본값 `anthropic`) Claude API로 보냅니다. 처음엔 `lesson_plan.py`만 provider를 바꿔 쓰도록 좁게 만들었지만, 이후 실전 1도 같은 클로바 키 하나로 크레딧 없이 전부 검증할 수 있도록 범위를 넓혔습니다.
 
 클로바 스튜디오는 OpenAI 호환 엔드포인트(`https://clovastudio.stream.ntruss.com/v1/openai/`)를 제공해서, 커스텀 HTTP 클라이언트를 새로 짤 필요 없이 `openai` 파이썬 SDK에 `base_url`만 바꿔서 그대로 재사용했습니다.
 
@@ -251,7 +251,7 @@ tests/
 
 ## 10. 알려진 제한사항
 
-- **실제 생성 결과는 클로바(HyperCLOVA X)로 검증했고, Claude로는 아직 검증 못했습니다.** 코드 경로는 provider에 무관하게 동일하고(`llm.complete()`로 추상화), 클로바로 8개 섹션이 모두 정상적으로 생성되는 것을 확인했습니다. Claude 크레딧을 충전하면 `LLM_PROVIDER`를 비우고 같은 방식으로 확인하면 됩니다.
+- **요약/질의분류/계획안 생성 모두 실제로는 클로바(HyperCLOVA X)로만 검증했고, Claude로는 아직 검증 못했습니다.** 코드 경로는 provider에 무관하게 동일하고(`llm.complete()`로 추상화), 클로바로는 계획안 8개 섹션이 모두 정상 생성되는 것을 확인했습니다. Claude 크레딧을 충전하면 `.env`에서 `LLM_PROVIDER`를 비우거나 `anthropic`으로 두고 같은 방식으로 확인하면 됩니다.
 - NCIC 데이터셋이 고1 공통 과목(국어/수학/영어/사회)으로 한정되어 있습니다. 다른 학년·선택과목 주제를 물으면 관련 성취기준이 없을 수 있습니다 (`ncic_standards/README.md` 참고).
 - `ncic_standards/go1_common_subjects.json`은 PDF 텍스트 추출로 만들어져서, 수식이 이미지로 삽입된 일부 성취기준(예: 수학 함수 그래프 관련 문항)은 텍스트가 빠져 있을 수 있습니다.
 - LLM이 섹션 값을 문자열이 아닌 리스트/딕셔너리로 반환하는 경우가 있어 `_stringify_section()`으로 정규화합니다(8-5 참고). 아주 깊게 중첩된 구조가 오면 완벽하게 예쁜 포맷은 아닐 수 있습니다.
