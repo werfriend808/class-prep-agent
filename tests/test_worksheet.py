@@ -109,6 +109,49 @@ def test_generate_worksheet_wraps_api_errors():
         worksheet.complete = original
 
 
+def test_generate_worksheet_retries_once_after_malformed_response():
+    calls = {"count": 0}
+
+    def _flaky(prompt, max_tokens=1500):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return "JSON 아닌 응답"
+        return _fake_worksheet_json()
+
+    original = worksheet.complete
+    worksheet.complete = _flaky
+    try:
+        result = generate_worksheet(_sample_plan())
+    finally:
+        worksheet.complete = original
+
+    assert calls["count"] == 2
+    for section in WORKSHEET_SECTIONS:
+        assert section in result
+
+
+def test_generate_worksheet_gives_up_after_second_failure():
+    calls = {"count": 0}
+
+    def _always_broken(prompt, max_tokens=1500):
+        calls["count"] += 1
+        return "계속 JSON 아님"
+
+    original = worksheet.complete
+    worksheet.complete = _always_broken
+    try:
+        try:
+            generate_worksheet(_sample_plan())
+        except WorksheetError:
+            pass
+        else:
+            raise AssertionError("WorksheetError가 발생해야 함")
+    finally:
+        worksheet.complete = original
+
+    assert calls["count"] == 2
+
+
 def test_worksheet_to_text_includes_all_sections():
     data = {k: f"{k} 내용" for k in WORKSHEET_SECTIONS}
     data.update(topic="환경 보전", subject="사회", grade="고1")

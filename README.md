@@ -346,6 +346,12 @@ python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없�
 | 채팅 수정 요청 (계획안 대상, `classify_edit_target()`이 "plan" 판정) | `lesson_plan.generate_lesson_plan(revision_request=...)` → `notion_writer.update_lesson_plan_in_notion()` → (활동지 존재 + 관련 필드 변경 시) `worksheet.generate_worksheet()` → `google_docs_writer.replace_doc_body()` |
 | 채팅 수정 요청 (활동지 대상, `classify_edit_target()`이 "worksheet" 판정) | `worksheet.generate_worksheet(plan, revision_request=...)` → `google_docs_writer.replace_doc_body()` (계획안/Notion 미변경) |
 
+### 13-6. LLM 응답 형식 불안정성: 실패 시 자동 재시도 1회
+
+실제로 겪은 문제(2026-08-11): 클로바가 "JSON만 답하라"는 프롬프트 지시를 가끔 안 지켜서 `generate_worksheet()`이 `WorksheetError("LLM 응답을 활동지 형식으로 해석하지 못했어요")`로 실패했는데, 진단 스크립트(`scripts/debug_worksheet_generation.py`)로 원인을 들여다보니 정상적인 JSON이 아닌 다른 형태로 응답한 순간이 있었을 뿐, 코드 쪽 파싱 로직 문제는 아니었습니다 — 같은 요청을 그대로 다시 보내면 정상적으로 파싱됐습니다.
+
+간헐적 현상이라고 판단해서, `lesson_plan.generate_lesson_plan()`과 `worksheet.generate_worksheet()` 둘 다 첫 시도가 실패하면(형식 오류든 LLM 호출 오류든) 자동으로 한 번만 재시도하고, 그래도 실패하면 그대로 에러를 올려서 사용자가 직접 다시 시도하게 합니다. 무한 재시도가 아니라 "한 번만"으로 제한한 이유는 13-4에서 고친 재시도 루프 버그와 같은 이유입니다 — 실패가 계속되는 상황(예: 크레딧 완전 소진)에서 계속 자동 재시도하면 LLM 호출만 쓸데없이 반복됩니다.
+
 ## 14. 프로젝트 구조 (종합 프로젝트 추가분)
 
 ```
@@ -357,6 +363,7 @@ src/
   conversation.py            # (기존 파일에 notion_page_id/worksheet 관련 상태 필드 추가)
 scripts/
   verify_google_docs_auth.py # Google OAuth 인증 + 실제 문서 생성/쓰기를 수동 검증하는 스크립트
+  debug_worksheet_generation.py # 활동지 생성 실패 시 LLM 원본 응답을 그대로 출력해 원인을 진단하는 스크립트
 tests/
   test_worksheet.py
   test_google_docs_writer.py

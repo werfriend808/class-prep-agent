@@ -65,6 +65,14 @@ def _build_prompt(plan: dict, revision_request: str | None) -> str:
     )
 
 
+def _generate_once(prompt: str) -> dict:
+    try:
+        raw_text = complete(prompt, max_tokens=1500)
+    except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
+        raise WorksheetError(f"학생 활동지 생성에 실패했어요 (LLM 호출 오류): {e}") from e
+    return _parse_worksheet_json(raw_text)
+
+
 def generate_worksheet(plan: dict, revision_request: str | None = None) -> dict:
     """수업계획안(dict)을 바탕으로 학생 활동지를 생성한다.
 
@@ -72,16 +80,20 @@ def generate_worksheet(plan: dict, revision_request: str | None = None) -> dict:
     revision_request를 넘기면 기존 활동지에 대한 수정 요청으로 취급해 다시
     생성한다 (수정 결과를 어느 doc_id에 반영할지는 이 함수의 책임이 아니고,
     호출하는 쪽에서 google_docs_writer.replace_doc_body로 반영한다).
-    실패 시(크레딧 부족, JSON 파싱 실패 등) WorksheetError를 올린다.
+
+    실제로 겪은 사례: 클로바(HyperCLOVA X)가 "JSON만 답하라"는 지시를 가끔
+    안 지켜서 파싱이 실패하는데, 같은 요청을 그대로 다시 보내면 정상적으로
+    나온다 — 간헐적 현상이라 판단해 실패하면 한 번만 자동으로 재시도한다.
+    재시도까지 실패하면(계속되는 형식 오류, 크레딧 부족 등) 그때는
+    WorksheetError를 그대로 올려서 사용자가 직접 다시 시도하게 한다.
     """
     prompt = _build_prompt(plan, revision_request)
 
     try:
-        raw_text = complete(prompt, max_tokens=1500)
-    except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
-        raise WorksheetError(f"학생 활동지 생성에 실패했어요 (LLM 호출 오류): {e}") from e
+        worksheet = _generate_once(prompt)
+    except WorksheetError:
+        worksheet = _generate_once(prompt)
 
-    worksheet = _parse_worksheet_json(raw_text)
     worksheet["topic"] = plan.get("topic", "")
     worksheet["subject"] = plan.get("subject", "")
     worksheet["grade"] = plan.get("grade", "")

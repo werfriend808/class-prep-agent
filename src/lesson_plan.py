@@ -70,6 +70,14 @@ def _build_prompt(
     )
 
 
+def _generate_once(prompt: str) -> dict:
+    try:
+        raw_text = complete(prompt, max_tokens=2000)
+    except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
+        raise LessonPlanError(f"수업계획안 생성에 실패했어요 (LLM 호출 오류): {e}") from e
+    return _parse_plan_json(raw_text)
+
+
 def generate_lesson_plan(
     subject: str,
     topic: str,
@@ -81,6 +89,10 @@ def generate_lesson_plan(
     반환값에는 8개 섹션 텍스트 + "ncic_references"(근거 문자열 리스트),
     subject/grade/topic이 들어있다. 실패 시(크레딧 부족, JSON 파싱 실패 등)
     LessonPlanError를 올린다 — chat_app.py에서 st.error로 잡아서 보여준다.
+
+    LLM이 "JSON만 답하라"는 지시를 가끔 안 지켜서 파싱이 실패하는 간헐적
+    현상이 있어(worksheet.py에서 실제로 겪고 고친 것과 같은 종류), 실패하면
+    한 번만 자동으로 재시도한다. 재시도까지 실패하면 그대로 올린다.
     """
     keywords = extract_keywords(topic)
     ncic_records = match_standards(subject, grade=grade, keywords=keywords, limit=5)
@@ -88,11 +100,10 @@ def generate_lesson_plan(
     prompt = _build_prompt(subject, grade, topic, ncic_records, revision_request)
 
     try:
-        raw_text = complete(prompt, max_tokens=2000)
-    except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
-        raise LessonPlanError(f"수업계획안 생성에 실패했어요 (LLM 호출 오류): {e}") from e
+        plan = _generate_once(prompt)
+    except LessonPlanError:
+        plan = _generate_once(prompt)
 
-    plan = _parse_plan_json(raw_text)
     plan["ncic_references"] = [format_citation(r) for r in ncic_records]
     plan["subject"] = subject
     plan["grade"] = grade

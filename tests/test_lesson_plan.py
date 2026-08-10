@@ -134,3 +134,49 @@ def test_generate_lesson_plan_wraps_api_errors_as_lesson_plan_error():
             raise AssertionError("LessonPlanError가 발생해야 함")
     finally:
         lesson_plan.complete = original
+
+
+def test_generate_lesson_plan_retries_once_after_malformed_response():
+    # 실제로 겪은 사례 재현: 클로바가 첫 시도에서 JSON이 아닌 응답을 줬다가
+    # 같은 요청을 재시도하면 정상적으로 돌아오는 간헐적 현상.
+    calls = {"count": 0}
+
+    def _flaky(prompt, max_tokens=2000):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return "이건 JSON이 아니에요"
+        return _fake_plan_json()
+
+    original = lesson_plan.complete
+    lesson_plan.complete = _flaky
+    try:
+        plan = generate_lesson_plan(subject="사회", topic="환경 보전과 개발", grade="고1")
+    finally:
+        lesson_plan.complete = original
+
+    assert calls["count"] == 2
+    for section in PLAN_SECTIONS:
+        assert section in plan
+
+
+def test_generate_lesson_plan_gives_up_after_second_failure():
+    calls = {"count": 0}
+
+    def _always_broken(prompt, max_tokens=2000):
+        calls["count"] += 1
+        return "계속 JSON이 아님"
+
+    original = lesson_plan.complete
+    lesson_plan.complete = _always_broken
+    try:
+        try:
+            generate_lesson_plan(subject="사회", topic="환경 보전", grade="고1")
+        except LessonPlanError:
+            pass
+        else:
+            raise AssertionError("LessonPlanError가 발생해야 함")
+    finally:
+        lesson_plan.complete = original
+
+    # 두 번까지만 시도하고 더 재시도하지 않아야 한다 (무한 재시도 방지).
+    assert calls["count"] == 2
