@@ -12,6 +12,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 # 한 번 조회해서 값을 채워 넣는다. TOPIC/TITLE 검색에는 필요 없다.
 NOTION_DATA_SOURCE_ID = os.getenv("NOTION_DATA_SOURCE_ID", "")
 
+# 실전 프로젝트 2: 생성한 수업계획안 페이지를 하위 페이지로 만들어 넣을 부모
+# Notion 페이지 ID. 이 페이지에 Integration이 Connections로 연결되어 있어야 한다.
+NOTION_LESSON_PLAN_PARENT_ID = os.getenv("NOTION_LESSON_PLAN_PARENT_ID", "")
+
 if not NOTION_API_KEY:
     raise RuntimeError(
         ".env에 NOTION_API_KEY가 설정되어 있지 않습니다. "
