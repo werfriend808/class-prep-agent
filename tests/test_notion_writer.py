@@ -7,9 +7,10 @@ save_lesson_plan_to_notion()의 실제 MCP 호출 부분은 실전 1의 test_pip
 확인한다.
 """
 import asyncio
+from types import SimpleNamespace
 
 import src.notion_writer as notion_writer
-from src.notion_writer import NotionWriteError, _extract_page_id, _page_url, plan_to_markdown
+from src.notion_writer import NotionWriteError, _extract_page_id, _page_url, _raise_if_tool_error, plan_to_markdown
 
 
 def _sample_plan() -> dict:
@@ -61,6 +62,47 @@ def test_page_url_prefers_response_url():
 def test_page_url_falls_back_to_constructed_url_without_hyphens():
     url = _page_url({}, "abc-123-def")
     assert url == "https://www.notion.so/abc123def"
+
+
+def test_raise_if_tool_error_does_nothing_when_not_error():
+    result = SimpleNamespace(isError=False, content=[])
+    _raise_if_tool_error(result, "테스트 액션")  # 예외 없이 통과해야 함
+
+
+def test_raise_if_tool_error_raises_with_message_from_content():
+    # 실제로 겪은 버그 재현: API-update-page-markdown이 검증 에러를 돌려줘도
+    # 예전 코드는 이 결과를 무시해서 페이지 본문이 비는 채로 "성공"이라고 나왔다.
+    result = SimpleNamespace(
+        isError=True,
+        content=[SimpleNamespace(text='{"status":400,"message":"body.type should be defined"}')],
+    )
+    try:
+        _raise_if_tool_error(result, "Notion 페이지 본문 작성")
+    except NotionWriteError as e:
+        assert "Notion 페이지 본문 작성" in str(e)
+        assert "body.type should be defined" in str(e)
+    else:
+        raise AssertionError("NotionWriteError가 발생해야 함")
+
+
+def test_raise_if_tool_error_detects_error_hidden_in_content_json():
+    # 실제로 겪은 두 번째 버그: notion-mcp-server는 Notion API 검증 에러가 나도
+    # isError를 True로 세팅하지 않고, content JSON 안에만 {"object":"error",...}
+    # 형태로 담아 보낸다. isError만 보면 이 실패를 놓친다.
+    result = SimpleNamespace(
+        isError=False,
+        content=[
+            SimpleNamespace(
+                text='{"status":400,"object":"error","message":"body.insert_content should be an object"}'
+            )
+        ],
+    )
+    try:
+        _raise_if_tool_error(result, "Notion 페이지 본문 작성")
+    except NotionWriteError as e:
+        assert "body.insert_content should be an object" in str(e)
+    else:
+        raise AssertionError("NotionWriteError가 발생해야 함")
 
 
 def test_save_lesson_plan_to_notion_raises_when_parent_id_missing():

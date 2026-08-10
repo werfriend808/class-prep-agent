@@ -11,8 +11,26 @@ docstring 참고):
 
 사전 조건: `.env`의 NOTION_LESSON_PLAN_PARENT_ID가 가리키는 Notion 페이지에
 Integration이 연결(Connections)되어 있어야 하고, 그 페이지 하위에 페이지를
-만들 수 있는 권한이 있어야 한다. (아직 실제 호출로 검증 못함 — 크레딧 없이도
-여기까지는 테스트 가능하니, Notion 연결만 해두면 이 부분은 지금 확인 가능.)
+만들 수 있는 권한이 있어야 한다.
+
+`API-update-page-markdown` 실제 스키마 (scripts/debug_notion_tools.py로 확인,
+2026-08-10): 필수 파라미터가 {page_id, type} 두 개고, `type`은
+"replace_content"(페이지 전체 덮어쓰기, 권장) / "update_content"(부분
+find-and-replace, 권장) / "insert_content" / "replace_content_range"
+(뒤의 둘은 deprecated) 중 하나다. 새로 만든 빈 페이지에 계획안 전체를 한 번에
+쓰는 용도이므로 "replace_content"를 쓴다.
+
+**주의 (실제로 겪은 두 가지 버그, scripts/debug_notion_tools.py로 재현/확인):**
+1. `insert_content`를 문자열로 보내면(`"insert_content": "마크다운..."`)
+   스키마상으로는 허용되는 것처럼 보이지만 실제로는 "body.insert_content
+   should be an object" 검증 에러가 난다 — 객체 형태
+   (`{"content": ..., "position": {"type": "end"}}`)로 보내야 한다.
+2. **notion-mcp-server는 Notion API 검증 에러가 나도 MCP `isError` 플래그를
+   True로 세팅하지 않는다** — 에러가 `content[0].text` 안에
+   `{"object":"error","status":400,...}` 형태의 JSON으로만 담겨 온다. 그래서
+   `isError`만 확인하면 실패를 놓친다 (처음에 이걸 놓쳐서 페이지는 생성되는데
+   본문은 계속 비어있는 채로 "성공"이라고 나왔었다). `_raise_if_tool_error`가
+   `isError`와 응답 JSON의 `object == "error"` 둘 다 확인하는 이유.
 """
 from __future__ import annotations
 
@@ -59,6 +77,26 @@ def plan_to_markdown(plan: dict) -> str:
     return "\n".join(lines)
 
 
+def _raise_if_tool_error(result: Any, action: str) -> None:
+    """MCP CallToolResult가 에러면 NotionWriteError로 바꿔서 올린다.
+
+    두 겹으로 확인해야 한다:
+    1) MCP 레벨 `isError` 플래그
+    2) notion-mcp-server가 Notion API 검증 에러를 `isError=False`인 채로
+       content JSON 안에 `{"object": "error", ...}` 형태로만 실어 보내는 경우
+       (실제로 겪은 버그 — module docstring 참고). 응답을 파싱해서 이 모양인지도
+       확인해야 진짜 실패를 놓치지 않는다.
+    """
+    if getattr(result, "isError", False):
+        content = getattr(result, "content", None)
+        message = getattr(content[0], "text", None) if content else None
+        raise NotionWriteError(f"{action} 실패: {message or result}")
+
+    obj = _tool_result_to_obj(result)
+    if isinstance(obj, dict) and obj.get("object") == "error":
+        raise NotionWriteError(f"{action} 실패: {obj.get('message', obj)}")
+
+
 def _extract_page_id(page_obj: Any) -> str | None:
     if isinstance(page_obj, dict):
         return page_obj.get("id")
@@ -94,14 +132,16 @@ async def save_lesson_plan_to_notion(plan: dict, parent_page_id: str | None = No
                 "properties": {"title": {"title": [{"text": {"content": title}}]}},
             },
         )
+        _raise_if_tool_error(create_result, "Notion 페이지 생성")
         page_obj = _tool_result_to_obj(create_result)
         page_id = _extract_page_id(page_obj)
         if not page_id:
             raise NotionWriteError("Notion 페이지 생성에 실패했어요 (응답에서 page_id를 찾지 못했어요).")
 
-        await session.call_tool(
+        update_result = await session.call_tool(
             "API-update-page-markdown",
-            {"page_id": page_id, "markdown": markdown},
+            {"page_id": page_id, "type": "replace_content", "replace_content": {"new_str": markdown}},
         )
+        _raise_if_tool_error(update_result, "Notion 페이지 본문 작성")
 
     return {"page_id": page_id, "url": _page_url(page_obj, page_id)}
