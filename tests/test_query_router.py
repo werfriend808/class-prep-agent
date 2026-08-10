@@ -2,7 +2,7 @@
 
 extract_filters / _heuristic_classify는 정규식 기반이라 네트워크나 API 키
 없이도 항상 결정적으로 통과해야 한다. classify_query()는 실제로는
-Claude API를 우선 호출하므로(.env에 유효한 ANTHROPIC_API_KEY가 있으면),
+LLM(.env의 LLM_PROVIDER에 따라 Claude 또는 클로바)을 우선 호출하므로,
 그 결과는 LLM 응답에 따라 달라질 수 있어 별도로 관대하게만 검증한다.
 """
 from src.query_router import (

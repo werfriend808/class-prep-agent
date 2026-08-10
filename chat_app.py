@@ -6,9 +6,9 @@
       (lesson_plan.py, NCIC 근거는 ncic_matcher.py에서) -> 사용자가 확인 후
       "Notion에 저장" 버튼으로 Notion 페이지 생성(notion_writer.py).
 
-주의: 계획안 "생성" 자체가 Claude API 호출이라 크레딧이 없으면 이 부분만
-막힌다 (검색 위주였던 실전 1과 다른 지점 — README 참고). 대화 흐름과 Notion
-저장은 크레딧과 무관하게 동작한다.
+주의: 계획안 "생성" 자체가 LLM 호출이라(.env의 LLM_PROVIDER에 따라 Claude 또는
+네이버 클로바) 크레딧/사용량이 없으면 이 부분만 막힌다 (검색 위주였던 실전 1과
+다른 지점 — README 참고). 대화 흐름과 Notion 저장은 크레딧과 무관하게 동작한다.
 """
 import asyncio
 

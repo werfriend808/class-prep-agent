@@ -1,6 +1,6 @@
 """Notion 쓰기 연동(API-post-page / API-update-page-markdown) 수동 검증 스크립트.
 
-Claude API를 거치지 않고 가짜 수업계획안 dict로 바로 notion_writer.save_lesson_plan_to_notion()
+LLM을 거치지 않고 가짜 수업계획안 dict로 바로 notion_writer.save_lesson_plan_to_notion()
 을 호출해본다. 크레딧 없이도 "MCP로 Notion 페이지를 실제로 생성할 수 있는가"만
 따로 확인할 수 있다 (계획안 생성 자체는 아직 검증 못한 부분으로 남는다).
 
@@ -24,7 +24,7 @@ FAKE_PLAN = {
     "grade": "고1",
     "topic": "[검증용] 환경 보전과 개발 중 무엇을 우선해야 하는가",
     "자료_개요": "이 계획안은 notion_writer.py의 Notion 쓰기 연동을 검증하기 위해 "
-    "Claude API 없이 수동으로 만든 가짜 데이터입니다.",
+    "LLM 없이 수동으로 만든 가짜 데이터입니다.",
     "수업_목표": "1. 환경 보전과 개발의 딜레마를 이해한다.\n2. 서로 다른 입장을 근거를 들어 주장할 수 있다.",
     "배경_읽기_자료": "예시 배경 자료 텍스트.",
     "핵심_개념": "지속가능발전, 생태시민",

@@ -1,7 +1,7 @@
 """pipeline.py의 순수 로직(응답 파싱, 필터 변환)에 대한 단위 테스트.
 
-search_and_summarize()는 실제로 notion-mcp-server(Node.js/npx)와 Claude API를
-호출하므로 여기서는 다루지 않는다 — 그건 실제 서버가 붙은 로컬 환경에서
+search_and_summarize()는 실제로 notion-mcp-server(Node.js/npx)와 LLM(Claude
+또는 클로바)을 호출하므로 여기서는 다루지 않는다 — 그건 실제 서버가 붙은 로컬 환경에서
 수동으로 확인한다(파일 상단 "실제 연동 확인 방법" 참고). 여기서는 네트워크
 없이도 항상 결정적으로 통과해야 하는 부분만 검증한다.
 """

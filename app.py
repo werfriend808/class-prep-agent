@@ -4,7 +4,8 @@
 
 사전 준비 (README 참고):
     - Node.js / npx 설치 (notion-mcp-server 구동용)
-    - .env에 NOTION_API_KEY, ANTHROPIC_API_KEY 설정
+    - .env에 NOTION_API_KEY 설정, 요약/분류용 LLM 키(ANTHROPIC_API_KEY 또는
+      LLM_PROVIDER=clova + HCX_API_KEY) 설정
     - FILTER(학년/과목/날짜) 검색을 쓰려면 .env에 NOTION_DATA_SOURCE_ID도 설정
 """
 import asyncio

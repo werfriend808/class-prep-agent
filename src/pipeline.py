@@ -202,10 +202,10 @@ _FALLBACK_SUMMARY_LEN = 150
 
 
 def _summarize_or_fallback(title: str, markdown: str) -> str:
-    """Claude API로 요약하되, 실패하면(크레딧 부족/키 없음/네트워크 오류 등)
-    본문 앞부분을 잘라 보여주는 것으로 대체한다.
+    """LLM(Claude 또는 클로바)으로 요약하되, 실패하면(크레딧 부족/키 없음/
+    네트워크 오류 등) 본문 앞부분을 잘라 보여주는 것으로 대체한다.
 
-    검색·MCP 연동 자체는 Claude API 없이도 확인할 수 있어야 하므로, 결제
+    검색·MCP 연동 자체는 LLM 호출 없이도 확인할 수 있어야 하므로, 결제
     문제로 요약 호출이 막혀 있어도 파이프라인 전체가 죽지 않게 한다.
     """
     if not markdown:
