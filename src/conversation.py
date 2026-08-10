@@ -10,12 +10,13 @@
      매칭(ncic_matcher.py)에 바로 쓰기 좋다.
 
 상태 전이:
-    COLLECTING (과목 -> 주제 순으로 질문) -> READY (모두 수집됨, 생성 트리거 대기)
+    COLLECTING (과목 -> 학년 -> 주제 순으로 질문) -> READY (모두 수집됨, 생성 트리거 대기)
     -> DRAFTED (수업계획안 생성 완료, 사용자에게 보여줌)
     -> REVISING (사용자가 수정 요청) -> DRAFTED (재생성) ... 반복 가능
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -28,16 +29,33 @@ class Phase(str, Enum):
 
 
 # 구체적인 과목명을 먼저 검사해야 "사회"가 "통합사회"/"한국사"를 삼키지 않는다.
-_SUBJECT_KEYWORDS = ["통합사회", "한국사", "국어", "수학", "영어", "사회"]
-_GRADE_PATTERN_KEYWORDS = {"고1": "고1", "고2": "고2", "고3": "고3", "1학년": "고1", "2학년": "고2", "3학년": "고3"}
+# ncic_standards/achievement_standards.json(전체 학년/과목, 4,199건)에 있는
+# 16개 과목 전부를 인식하도록 확장했다 (과제 스펙의 "대상 학년/과목: 전체
+# 제한 없음" 요구사항 반영 — 예전엔 고1 공통 과목 5개만 지원했었다).
+_SUBJECT_KEYWORDS = [
+    "통합사회", "한국사", "국어", "수학", "영어", "사회",
+    "도덕", "과학", "음악", "미술", "체육", "한문", "제2외국어",
+    "교양", "정보", "기술가정", "실과",
+]
 
-DEFAULT_GRADE = "고1"  # 현재 ncic_standards 데이터셋이 고1 공통 과목뿐이라 기본값으로 둔다.
+# "초3", "중2", "고1"처럼 데이터셋(ncic_matcher.grade_bands_for)이 바로 알아듣는
+# 표기로 정규화한다. 학교급 없이 "3학년"만 말하면 어느 학교급인지 알 수 없어
+# 인식하지 못한 것으로 처리하고 재질문한다(학년을 학교급 없이 잘못 넘기면
+# ncic_matcher가 엉뚱한 학년군을 찾게 된다).
+_GRADE_PATTERN = re.compile(
+    r"(초등학교|초등|초)\s*([1-6])\s*학년|(중학교|중)\s*([1-3])\s*학년|(고등학교|고)\s*([1-3])\s*학년"
+    r"|(초)([1-6])(?!\d)|(중)([1-3])(?!\d)|(고)([1-3])(?!\d)"
+)
+_LEVEL_MAP = {"초등학교": "초", "초등": "초", "초": "초", "중학교": "중", "중": "중", "고등학교": "고", "고": "고"}
+
+DEFAULT_GRADE = "고1"  # 학년을 끝내 못 알아들었을 때만 쓰는 최후 폴백.
 
 SLOT_QUESTIONS = {
-    "subject": "어떤 과목의 토의·토론 수업을 준비할까요? (예: 국어, 수학, 영어, 사회/통합사회/한국사)",
+    "subject": "어떤 과목의 토의·토론 수업을 준비할까요? (예: 국어, 수학, 영어, 사회, 과학, 도덕, 음악, 미술, 체육 등)",
+    "grade": "몇 학년 대상인가요? (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)",
     "topic": "어떤 주제나 소재로 진행하고 싶으신가요? (예: '환경 보전과 개발 중 무엇을 우선해야 하는가')",
 }
-REQUIRED_SLOTS = ["subject", "topic"]
+REQUIRED_SLOTS = ["subject", "grade", "topic"]
 
 
 def extract_subject(text: str) -> str | None:
@@ -48,9 +66,15 @@ def extract_subject(text: str) -> str | None:
 
 
 def extract_grade(text: str) -> str | None:
-    for kw, grade in _GRADE_PATTERN_KEYWORDS.items():
-        if kw in text:
-            return grade
+    m = _GRADE_PATTERN.search(text)
+    if not m:
+        return None
+    groups = m.groups()
+    # 세 가지 하위 패턴(학교급+"N학년" / 학교급+숫자) 중 어느 것이 매칭됐는지 순서대로 확인
+    for level_idx, num_idx in ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9), (10, 11)):
+        level_raw, num = groups[level_idx], groups[num_idx]
+        if level_raw and num:
+            return f"{_LEVEL_MAP[level_raw]}{num}"
     return None
 
 
@@ -95,12 +119,17 @@ class ConversationState:
             if current_slot == "subject":
                 subject = extract_subject(message)
                 if subject is None:
-                    reply = "죄송해요, 어떤 과목인지 못 알아들었어요. 국어/수학/영어/사회(또는 통합사회, 한국사) 중에서 골라주세요."
+                    reply = "죄송해요, 어떤 과목인지 못 알아들었어요. 국어/수학/영어/사회/과학/도덕/음악/미술/체육 등 중에서 골라주세요."
                     self._record("assistant", reply)
                     return reply
                 self.slots["subject"] = subject
+            elif current_slot == "grade":
                 grade = extract_grade(message)
-                self.slots["grade"] = grade or DEFAULT_GRADE
+                if grade is None:
+                    reply = "죄송해요, 학년을 못 알아들었어요. 학교급을 포함해서 말씀해주세요 (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)."
+                    self._record("assistant", reply)
+                    return reply
+                self.slots["grade"] = grade
             elif current_slot == "topic":
                 topic = message.strip()
                 if not topic:

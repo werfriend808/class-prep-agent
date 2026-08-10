@@ -23,8 +23,8 @@ st.set_page_config(page_title="수업계획안 챗봇", page_icon="💬", layout
 
 st.title("토의·토론 수업계획안 챗봇")
 st.caption(
-    f"과목({', '.join(available_subjects())})과 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
-    "근거한 토의·토론 수업계획안을 만들어드려요."
+    f"과목({', '.join(available_subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
+    "근거한 토의·토론 수업계획안을 만들어드려요. (초등학교~고등학교 전 학년 지원)"
 )
 
 if "conv" not in st.session_state:
