@@ -4,3 +4,6 @@ mcp>=1.2
 python-dotenv>=1.0
 pytest>=8.0
 openai>=1.0  # LLM_PROVIDER=clova로 네이버 클로바 스튜디오(OpenAI 호환 API)를 쓸 때 필요 (실전 1 요약/질의분류 + 실전 2 계획안 생성)
+google-api-python-client>=2.100  # 종합 프로젝트: Google Docs/Drive REST API
+google-auth-httplib2>=0.2
+google-auth-oauthlib>=1.2  # credentials.json 기반 OAuth Desktop flow, token.json에 갱신 토큰 저장

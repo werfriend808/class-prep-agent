@@ -27,6 +27,18 @@ NOTION_DATA_SOURCE_ID = os.getenv("NOTION_DATA_SOURCE_ID", "")
 # Notion 페이지 ID. 이 페이지에 Integration이 Connections로 연결되어 있어야 한다.
 NOTION_LESSON_PLAN_PARENT_ID = os.getenv("NOTION_LESSON_PLAN_PARENT_ID", "")
 
+# 종합 프로젝트: 학생 활동지를 Google Docs로 쓰기 위한 OAuth Desktop-app 인증.
+# MCP 대신 REST API(google-api-python-client) 직접 연동을 쓰기로 결정함
+# (공식 Google Docs MCP는 아직 Developer Preview에 create 기능이 없고, 원격
+# OAuth-HTTP라 커스텀 클라이언트를 새로 짜야 해서 부담이 큼 — 스펙 문서가
+# "MCP만으로 어려우면 REST API 병행 가능"이라고 명시적으로 허용).
+# credentials.json: Google Cloud Console에서 발급한 OAuth 클라이언트(Desktop app) 원본.
+# token.json: 최초 인증 후 자동 생성되는 갱신 토큰 캐시. 둘 다 .gitignore에 있음.
+GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "credentials.json")
+GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
+# 학생 활동지 Google Doc을 만들 때 넣어줄 Drive 폴더 ID (선택). 비어있으면 내 드라이브 최상위에 생성.
+GOOGLE_DOCS_FOLDER_ID = os.getenv("GOOGLE_DOCS_FOLDER_ID", "")
+
 if not NOTION_API_KEY:
     raise RuntimeError(
         ".env에 NOTION_API_KEY가 설정되어 있지 않습니다. "

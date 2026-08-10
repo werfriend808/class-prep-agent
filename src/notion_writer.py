@@ -111,6 +111,28 @@ def _page_url(page_obj: Any, page_id: str) -> str:
     return f"https://www.notion.so/{compact_id}"
 
 
+async def update_lesson_plan_in_notion(page_id: str, plan: dict) -> dict:
+    """이미 만들어진 수업계획안 Notion 페이지의 본문을 새 내용으로 덮어쓴다.
+
+    종합 프로젝트의 수정-전파 요구사항: 사용자가 대화로 계획안 수정을
+    요청하면 매번 새 페이지를 만드는 게 아니라 같은 page_id의 본문을
+    replace_content로 교체해서 "하나의 계획안"이라는 일관성을 유지한다.
+    (save_lesson_plan_to_notion은 API-post-page로 새 페이지를 만드는 반면,
+    이 함수는 API-update-page-markdown만 호출한다.)
+    """
+    markdown = plan_to_markdown(plan)
+
+    client = NotionMCPClient()
+    async with client.session() as session:
+        update_result = await session.call_tool(
+            "API-update-page-markdown",
+            {"page_id": page_id, "type": "replace_content", "replace_content": {"new_str": markdown}},
+        )
+        _raise_if_tool_error(update_result, "Notion 페이지 본문 수정")
+
+    return {"page_id": page_id, "url": _page_url({}, page_id)}
+
+
 async def save_lesson_plan_to_notion(plan: dict, parent_page_id: str | None = None) -> dict:
     """수업계획안을 Notion 페이지로 생성하고 {"page_id", "url"}을 반환한다."""
     parent_id = parent_page_id or NOTION_LESSON_PLAN_PARENT_ID

@@ -85,6 +85,15 @@ class ConversationState:
     history: list[dict] = field(default_factory=list)  # [{"role": "user"/"assistant", "content": str}]
     draft: dict | None = None  # lesson_plan.generate_lesson_plan()의 결과
     notion_url: str | None = None
+    # 종합 프로젝트: 수정-전파를 위해 page_id를 따로 들고 있어야 한다 (URL만으로는
+    # "같은 페이지를 업데이트"할 수 없고, Notion 쓰기 tool은 page_id를 요구한다).
+    notion_page_id: str | None = None
+    # 학생 활동지(worksheet.py의 결과, Google Docs writer의 결과). 활동지는
+    # 계획안과 달리 사용자가 명시적으로 "만들기" 버튼을 눌러야 처음 생성되는
+    # opt-in 흐름이라, 생성 전에는 전부 None으로 둔다.
+    worksheet: dict | None = None
+    worksheet_doc_id: str | None = None
+    worksheet_url: str | None = None
 
     def missing_slots(self) -> list[str]:
         return [s for s in REQUIRED_SLOTS if s not in self.slots]
@@ -178,3 +187,7 @@ class ConversationState:
         self.slots = {}
         self.draft = None
         self.notion_url = None
+        self.notion_page_id = None
+        self.worksheet = None
+        self.worksheet_doc_id = None
+        self.worksheet_url = None

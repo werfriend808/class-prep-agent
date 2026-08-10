@@ -1,11 +1,11 @@
-# class-prep-agent — 실전 프로젝트 1·2: MCP 기반 Notion 검색/요약 + AI 챗봇 수업계획안 생성
+# class-prep-agent — 멋사 NLP5기 "AI 기반 교육활동 지원 서비스" (실전 1·2 + 종합 프로젝트)
 
-멋사 NLP5기 "[AI 기반 교육활동 지원 서비스]" 프로젝트의 실전 1·2 구현체입니다. 하나의 저장소에서 두 개의 독립된 Streamlit 앱으로 제공합니다.
+멋사 NLP5기 "[AI 기반 교육활동 지원 서비스]" 프로젝트의 구현체입니다. 하나의 저장소에서 두 개의 Streamlit 앱으로 제공합니다.
 
 - **실전 프로젝트 1** (`app.py`): 자연어 질의로 Notion 팀스페이스의 수업 자료를 검색·요약
-- **실전 프로젝트 2** (`chat_app.py`): 멀티턴 챗봇으로 토의·토론 수업계획안을 생성하고 NCIC 근거를 붙여 Notion 페이지로 저장
+- **실전 프로젝트 2 + 종합 프로젝트** (`chat_app.py`): 멀티턴 챗봇으로 토의·토론 수업계획안을 생성해 Notion에 저장하고(실전 2), 여기에 이어서 학생 활동지 생성(Google Docs 연동)과 생성 후 수정 요청의 외부 서비스 자동 반영(종합 프로젝트)까지 같은 진입점에서 처리합니다. 실전 2를 별도 앱으로 분리하지 않고 같은 파일 위에서 확장한 이유는 아래 13번 참고.
 
-전체 프로젝트 계획(종합 프로젝트 포함)은 이 문서 맨 아래 "부록"에 정리되어 있습니다.
+전체 프로젝트 계획은 이 문서 맨 아래 "부록"에 정리되어 있습니다.
 
 ---
 
@@ -145,8 +145,9 @@ tests/                    # 실전 1 관련 순수 로직 단위 테스트 (실�
 
 1. 과목/학년/주제 정보를 바탕으로 `ncic_standards/`에서 관련 성취기준을 찾고
 2. LLM(Claude 또는 네이버 클로바)로 8개 섹션(자료 개요, 수업 목표, 배경 읽기 자료, 핵심 개념, 토론 쟁점, 수업 흐름, 학생 활동지 예시, 평가 루브릭)짜리 토의·토론 수업계획안을 생성하고
-3. 화면에 초안을 보여주면서 자유 텍스트로 수정 요청("토론 쟁점을 3개로 줄여줘")을 받아 재생성하고
-4. "Notion에 저장" 버튼을 누르면 MCP로 실제 Notion 페이지를 만들어 링크를 돌려줍니다.
+3. 생성되는 즉시 MCP로 Notion 페이지를 만들어 링크를 보여줍니다(버튼 없이 자동 — 종합 프로젝트에서 이렇게 바꾼 이유는 13-2 참고).
+4. 화면에 초안을 보여주면서 자유 텍스트로 수정 요청("토론 쟁점을 3개로 줄여줘")을 받으면 같은 Notion 페이지를 업데이트하고,
+5. 원하면 "학생 활동지도 만들기" 버튼으로 활동지를 생성해 Google Docs에 저장하고, 이후 활동지에 영향 있는 수정이면 Google Docs도 자동으로 함께 갱신합니다 (종합 프로젝트 확장분 — 자세한 내용은 11~13번 참고).
 
 ## 7. 실행 방법
 
@@ -180,11 +181,13 @@ ncic_matcher.match_standards()   ──▶  과목/학년군/키워드로 NCIC �
 lesson_plan.generate_lesson_plan() ──▶  LLM(Claude 또는 클로바)로 8개 섹션 JSON 생성
    │                                     (NCIC 인용은 LLM이 아니라 위 매칭 결과를 그대로 붙임)
    ▼
-notion_writer.save_lesson_plan_to_notion() ──▶  MCP로 페이지 생성 + 마크다운 본문 작성
+notion_writer.save/update_lesson_plan_in_notion() ──▶  MCP로 페이지 생성(최초) 또는 본문 갱신(수정)
    │
    ▼
-chat_app.py (Streamlit)          ──▶  채팅 UI + 초안 표시 + "Notion에 저장" 버튼
+chat_app.py (Streamlit)          ──▶  채팅 UI + 초안 표시, 생성/수정 시 자동으로 Notion 반영
 ```
+
+(종합 프로젝트에서 학생 활동지/Google Docs/수정-전파가 추가된 전체 흐름은 아래 11~13번 참고)
 
 ### 8-2. Notion 쓰기 tool 실제 스키마와 겪은 버그들
 
@@ -212,7 +215,7 @@ chat_app.py (Streamlit)          ──▶  채팅 UI + 초안 표시 + "Notion�
 
 ### 8-4. 멀티턴 대화 방식: 순차 질문 수집 → 초안 → 피드백 수정 (혼합형)
 
-`conversation.ConversationState`가 과목 → 학년 → 주제 순서로 정보를 모으고(규칙 기반 키워드 매칭, LLM 불필요), 다 모이면 `lesson_plan.generate_lesson_plan()`을 호출해 초안을 만듭니다. 학년은 "초등학교 3학년"처럼 학교급을 포함해서 답해야 인식됩니다(학교급 없이 "3학년"만 말하면 어느 학년군 성취기준을 찾아야 할지 알 수 없어 재질문합니다). 초안이 나온 뒤 채팅창에 입력하는 내용은 전부 "수정 요청"으로 간주해 재생성합니다(저장/승낙 의사는 버튼으로 별도 처리 — 자유 텍스트로 "괜찮아요" 같은 승낙 문구까지 규칙으로 구분하면 오탐이 잦아서 분리했습니다).
+`conversation.ConversationState`가 과목 → 학년 → 주제 순서로 정보를 모으고(규칙 기반 키워드 매칭, LLM 불필요), 다 모이면 `lesson_plan.generate_lesson_plan()`을 호출해 초안을 만듭니다. 학년은 "초등학교 3학년"처럼 학교급을 포함해서 답해야 인식됩니다(학교급 없이 "3학년"만 말하면 어느 학년군 성취기준을 찾아야 할지 알 수 없어 재질문합니다). 초안이 나온 뒤 채팅창에 입력하는 내용은 전부 "수정 요청"으로 간주해 재생성합니다. 활동지 생성처럼 "이걸 시작해도 될까"에 해당하는 명시적 승낙 의사는 자유 텍스트가 아니라 버튼으로 받습니다 — "괜찮아요"/"응" 같은 승낙 문구까지 규칙으로 구분하려면 오탐이 잦아지기 때문입니다 (종합 프로젝트에서 활동지 생성 버튼에도 같은 원칙을 그대로 적용했습니다 — 13-2 참고).
 
 이 방식을 택한 이유는 정보 수집 단계를 규칙 기반으로 처리할 수 있어 LLM 크레딧 없이도 대화 흐름 자체는 끝까지 테스트할 수 있었기 때문입니다 (실제 "생성" 한 걸음만 LLM 호출이 필요).
 
@@ -258,6 +261,107 @@ tests/
 
 ---
 
+# 종합 프로젝트: AI 기반 수업 활동 에이전트 서비스 (토의·토론 Activity)
+
+세 가지 Activity(토의·토론/PBL/Quiz) 중 "최소 1개 이상 완성도 있게 구현"이 요구사항이라, 실전 2에서 이미 만든 토의·토론 파이프라인을 생성+수정 모두 되는 완성도로 확장하는 쪽을 택했습니다(PBL/Quiz는 미구현 — 15번 참고). 별도 앱을 새로 만들지 않고 `chat_app.py` 위에서 그대로 확장한 이유, 각 설계 결정의 근거, Tool Orchestration 방식은 아래에 정리합니다.
+
+## 11. 실전 2와 달라진 점
+
+실전 2는 "생성해서 Notion에 저장"까지가 끝이었습니다. 종합 프로젝트는 그 뒤에 두 가지가 더 필요합니다.
+
+1. **학생 활동지를 만들어서 Google Docs에 저장** (Notion 하나만 다루던 실전 2에서 외부 서비스가 하나 늘어남)
+2. **생성 이후에도 대화로 계속 수정할 수 있고, 수정 결과가 이미 만들어진 외부 문서(Notion 페이지, Google Docs)에도 일관되게 반영** (실전 2는 저장 전 초안 단계에서만 수정이 가능했고, 저장 후에는 손댈 방법이 없었습니다)
+
+## 12. 실행 방법 (실전 2 대비 추가로 필요한 것)
+
+실전 2의 사전 준비물(Python, Node.js/npx, Notion Integration, LLM 키)에 더해 Google Docs 연동을 위한 OAuth 설정이 필요합니다.
+
+1. [Google Cloud Console](https://console.cloud.google.com)에서 프로젝트를 만들고 **Google Docs API**, **Google Drive API**를 활성화
+2. OAuth 동의 화면 구성 (User type: External, 테스트 모드로 충분 — 별도 앱 심사 불필요). **테스트 사용자에 본인 Google 계정을 반드시 추가해야 합니다** — 프로젝트 소유자 본인 계정이라도 테스트 사용자 목록에 없으면 "앱이 Google 인증 절차를 완료하지 않았습니다" 오류로 막힙니다.
+3. 사용자 인증 정보 → OAuth 클라이언트 ID 생성 (애플리케이션 유형: **데스크톱 앱**) → 다운로드한 JSON을 저장소 루트에 `credentials.json`으로 저장 (`.gitignore`에 이미 포함되어 있어 커밋되지 않습니다)
+4. 최초 실행 시 `python scripts/verify_google_docs_auth.py`를 한 번 돌리면 브라우저 인증 후 `token.json`이 생성되고, 이후로는 브라우저 없이 자동 인증됩니다.
+
+```bash
+pip install -r requirements.txt
+python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없으면 python -m 필요
+```
+
+**겪은 문제 두 가지 (둘 다 코드 문제 아님, 계정/환경 문제):**
+- OAuth 동의 화면에서 테스트 사용자 등록을 빼먹으면 위 2번의 오류가 남 — Google Auth Platform > Audience에서 추가하면 해결됩니다.
+- Google Drive 저장 공간이 가득 차 있으면 `files().create()`가 `403 storageQuotaExceeded`로 실패합니다 — Drive 웹에서 새 파일을 만들어도 똑같이 막히는 계정 자체의 문제라, 휴지통을 비우는 등 공간을 확보해야 합니다(휴지통에 있는 동안은 용량이 반환되지 않는 점이 놓치기 쉬웠습니다).
+
+## 13. Agent 설계 의도 · Workflow · Tool Orchestration
+
+### 13-1. 왜 Google Docs는 MCP가 아니라 REST API인가
+
+실전 1·2는 `notion-mcp-server`를 로컬 stdio 프로세스로 띄워서 썼습니다. Google Docs도 같은 방식을 먼저 찾아봤지만, 조사 결과(2026-08-10) 세 가지 선택지가 있었고 전부 이 방식을 그대로 재현하기엔 부적합했습니다.
+
+| 선택지 | 문제 |
+|---|---|
+| 공식 Google Docs 원격 MCP (`docsmcp.googleapis.com`) | Developer Preview 단계. tool이 `read_doc`/`update_doc`뿐이라 **문서 생성 tool이 없음**(Drive MCP의 `create_file`을 따로 조합해야 함). 로컬 stdio가 아니라 원격 HTTP+OAuth 방식이라, notion-mcp-server 때처럼 프로세스만 띄우면 되는 게 아니라 우리 앱이 원격 MCP OAuth 클라이언트를 처음부터 구현해야 함 |
+| 커뮤니티 MCP 서버(`google_workspace_mcp` 등) | notion-mcp-server와 같은 로컬 stdio 패턴이라 구조는 맞지만, 비공식/검증되지 않은 코드에 학생 개인정보가 오갈 수 있는 OAuth 인증을 맡기는 셈이라 신뢰성 검증 비용이 큼 |
+| REST API 직접 호출 (`google-api-python-client`) | 채택 |
+
+과제 스펙 자체가 "MCP만으로 구현하기 어려운 기능이 있거나 합리적인 이유가 있다면 REST API 등 다른 방식을 함께 사용할 수 있다"고 명시하고 있어, 위 표의 근거로 REST API를 선택했습니다. `google-api-python-client` + OAuth Desktop-app 플로우로 구현했고(`src/google_docs_writer.py`), 스코프는 `documents`와 `drive.file`(이 앱이 만든 파일만 접근 — 드라이브 전체에 접근하는 광범위한 스코프보다 안전)만 요청합니다. Google Forms를 쓰는 Quiz Activity를 나중에 추가한다면 같은 REST API 접근이 필요할 가능성이 높습니다 — Forms는 공식 MCP 서버 자체가 없기 때문입니다.
+
+### 13-2. 생성 흐름: 계획안은 자동 저장, 활동지는 opt-in
+
+과제 스펙의 사용자 시나리오 예시를 보면, 계획안은 생성되자마자 자동으로 Notion에 저장되고("AI Agent는 교육과정을 참고하여 수업계획안을 생성하고 Notion에 저장합니다"), 그다음에야 활동지를 만들지 물어봅니다("학생들이 사용할 활동지도 함께 생성할까요?"). 이 비대칭을 그대로 반영했습니다.
+
+- **계획안**: `_run_generation()`이 생성에 성공하면 그 자리에서 바로 Notion에 반영합니다. 실전 2처럼 "Notion에 저장" 버튼을 따로 두지 않습니다.
+- **활동지**: "학생 활동지도 만들기" 버튼을 눌러야 생성됩니다. 채팅으로 "응", "만들어줘" 같은 승낙 문구를 자동 인식하게 만들 수도 있었지만, 8-4에서 이미 채택한 원칙(승낙/거절처럼 되돌리기 부담이 있는 액션은 버튼으로만 받는다 — 자유 텍스트 인식은 오탐 위험)을 그대로 따랐습니다.
+
+### 13-3. 수정 전파: 필드 diff, LLM 재분류 없음
+
+생성 이후 채팅으로 들어오는 모든 메시지는 `conversation.py`의 기존 상태 기계에 따라 "계획안 수정 요청"으로 처리되어 `lesson_plan.generate_lesson_plan(..., revision_request=메시지)`로 계획안 전체를 다시 생성합니다(부분 필드 패치가 아니라 전체 재생성 — 이미 실전 2에 있던 기능을 그대로 재사용). 문제는 그다음입니다: 이 수정이 이미 만들어진 학생 활동지에도 영향을 주는지 어떻게 판단할까.
+
+별도로 "이 수정이 활동지에 영향을 주나요?"를 LLM에게 다시 묻는 방법도 있었지만, 다음 이유로 **필드 diff 방식**(`src/edit_propagation.py`의 `worksheet_needs_update()`)을 택했습니다.
+
+- `worksheet.py`의 프롬프트는 계획안의 `topic`/`subject`/`grade`/`토론_쟁점`/`수업_흐름` 5개 필드만 참고합니다. 수정 전후 계획안에서 이 5개 필드가 하나도 안 바뀌었다면, 활동지를 다시 만들어도 결과가 같을 수밖에 없습니다 — 즉 "영향이 있는가"라는 질문의 답이 이미 코드 안에 있는 정보(활동지가 실제로 읽는 입력이 뭔지)로 결정론적으로 계산됩니다.
+- LLM 분류는 크레딧을 한 번 더 쓰고, 애매한 답을 낼 수도 있고, 테스트하기도 어렵습니다. 필드 diff는 순수 함수라 네트워크 없이 유닛 테스트로 완전히 검증됩니다(`tests/test_edit_propagation.py`).
+
+이 판단에 따라 활동지 재생성이 필요하면 `worksheet.generate_worksheet()`을 다시 호출하고 `google_docs_writer.replace_doc_body()`로 같은 문서에 덮어씁니다. Notion 쪽은 판단 없이 항상 `update_lesson_plan_in_notion()`으로 같은 페이지를 업데이트합니다(계획안이 바뀌었다는 사실 자체는 항상 확정적이라 별도 판단이 필요 없습니다). 두 반영 모두 **사용자 확인 없이 자동으로 실행됩니다** — 이미 존재하는 문서를 최신 상태로 유지하는 것이 "일관성 유지"라는 요구사항의 취지에 더 맞는다고 판단했습니다(활동지 최초 생성처럼 "새 문서를 만들지 말지"와는 성격이 다른 결정이라고 봤습니다).
+
+### 13-4. 부수적으로 고친 버그
+
+이 작업을 하며 실전 2 코드에 있던 버그 하나를 같이 고쳤습니다: `chat_app.py`가 계획안 생성 실패 여부와 무관하게 `st.rerun()`을 무조건 호출하고 있어서, 실패 메시지가 사용자에게 보이기도 전에 화면이 다시 그려지고 상태가 그대로면 곧바로 재시도가 반복될 수 있었습니다. 종합 프로젝트에서는 생성 성공 시 Notion/Google Docs 쓰기까지 함께 일어나므로 이 재시도 루프가 훨씬 위험해져서(실패한 시도마다 외부 서비스에 불필요한 요청이 반복될 수 있음) 이번에 `_run_generation()`이 성공 여부를 반환하도록 고치고, 호출부는 성공했을 때만 rerun하도록 바꿨습니다.
+
+### 13-5. Tool Routing 요약
+
+이번 Activity는 하나뿐이라 "여러 Activity 중 어느 것을 쓸지 라우팅"하는 로직은 아직 없습니다(15번 참고). 대신 하나의 Activity 안에서 어떤 외부 서비스 호출이 필요한지는 아래처럼 결정됩니다.
+
+| 사용자 행동 | 호출되는 것 |
+|---|---|
+| 슬롯(과목/학년/주제) 다 채움 | `lesson_plan.generate_lesson_plan()` → `notion_writer.save_lesson_plan_to_notion()` |
+| "활동지도 만들기" 버튼 | `worksheet.generate_worksheet()` → `google_docs_writer.create_and_write_doc()` |
+| 초안/저장된 계획안에 수정 요청 | `lesson_plan.generate_lesson_plan(revision_request=...)` → `notion_writer.update_lesson_plan_in_notion()` → (활동지 존재 + 관련 필드 변경 시) `worksheet.generate_worksheet()` → `google_docs_writer.replace_doc_body()` |
+
+## 14. 프로젝트 구조 (종합 프로젝트 추가분)
+
+```
+src/
+  worksheet.py               # 학생 활동지 생성 (lesson_plan.py와 같은 패턴, 계획안 dict를 입력으로 받음)
+  google_docs_writer.py      # Google Docs REST API 연동 (OAuth Desktop flow, 문서 생성/전체 교체 쓰기)
+  edit_propagation.py        # 계획안 수정이 활동지에도 영향을 주는지 판단하는 순수 함수
+  notion_writer.py           # (기존 파일에 update_lesson_plan_in_notion 추가 — 같은 페이지 업데이트용)
+  conversation.py            # (기존 파일에 notion_page_id/worksheet 관련 상태 필드 추가)
+scripts/
+  verify_google_docs_auth.py # Google OAuth 인증 + 실제 문서 생성/쓰기를 수동 검증하는 스크립트
+tests/
+  test_worksheet.py
+  test_google_docs_writer.py
+  test_edit_propagation.py
+```
+
+## 15. 알려진 제한사항
+
+- **PBL/Quiz Activity는 미구현입니다.** 과제 스펙이 "최소 1개 이상 완성도 있게 구현"을 권장해서, 토의·토론 하나를 생성+수정+외부 서비스 반영까지 끝까지 완성하는 쪽을 택했습니다. Activity 선택 화면(여러 Activity 중 고르는 UI)도 같은 이유로 아직 없습니다.
+- **수정 요청이 계획안용인지 활동지용인지 구분하지 않습니다.** 지금은 초안/저장된 계획안 단계에서 들어오는 모든 채팅 메시지를 "계획안 수정 요청"으로만 해석합니다(`conversation.py`의 기존 상태 기계 구조를 그대로 재사용했기 때문). 그래서 "활동지 난이도를 낮춰줘"처럼 활동지를 직접 겨냥한 요청도 계획안 재생성 프롬프트로 들어가게 되고, 그 결과가 우연히 `WORKSHEET_RELEVANT_FIELDS`(13-3 참고)를 건드려야만 활동지에 반영됩니다. "이 메시지가 계획안 얘기인지 활동지 얘기인지" 자체를 분류하는 단계가 없다는 게 정확한 한계이고, 다음으로 손볼 부분으로 남겨뒀습니다.
+- **Google Docs 활동지는 서식이 없는 순수 텍스트입니다.** Docs API의 `insertText`가 마크다운을 렌더링하지 않아서, 제목/구분선을 굵게·크게 표시하는 등의 서식(`updateTextStyle` 등 추가 batchUpdate 요청)은 아직 넣지 않았습니다.
+- Google Docs 연동은 실전 1·2의 "크레딧 없이 개발" 방침과 별개로 **본인 Google 계정의 OAuth 인증과 Drive 저장 공간**이 필요합니다(12번 참고) — 비용은 들지 않지만 계정 설정이 한 단계 더 필요합니다.
+
+---
+
 ## 부록: 전체 프로젝트 계획 (실전 1 · 실전 2 · 종합)
 
 > 아래는 프로젝트 시작 시점에 정리해둔 전체 3단계 계획입니다. 실전 프로젝트 2와 종합 프로젝트를 시작할 때 참고용으로 남겨둡니다.
@@ -293,7 +397,7 @@ tests/
 
 **사전 조사 필요:** MCP를 통한 Notion 쓰기 방식, NCIC 자료 활용 방식(검색/RAG/벡터DB), 멀티턴 대화 상태 관리 방식.
 
-### A-4. 종합 프로젝트 — AI 기반 수업 활동 에이전트 서비스 (예정)
+### A-4. 종합 프로젝트 — AI 기반 수업 활동 에이전트 서비스 (토의·토론 구현 완료 — 상세는 위 11~15번 참고)
 
 **개요:** 교사의 수업 활동(토의·토론, 프로젝트 학습, 퀴즈)에 특화된 AI Agent를 설계하고, 여러 외부 서비스와 연동해 수업자료를 생성·수정하는 서비스. 핵심은 "Tool을 몇 개 연결했는가"가 아니라 "사용자에게 자연스러운 Workflow를 어떻게 설계했는가".
 
@@ -337,4 +441,4 @@ Notion만 연동                 Notion만 연동                    Notion + Go
 
 ---
 
-*이 문서는 2026-08-10 기준으로 갱신되었습니다 (실전 프로젝트 1·2 구현 반영). 종합 프로젝트 진행 상황에 따라 추가 갱신이 필요합니다.*
+*이 문서는 2026-08-11 기준으로 갱신되었습니다 (실전 프로젝트 1·2 + 종합 프로젝트 토의·토론 Activity 구현 반영). PBL/Quiz Activity를 추가로 구현하면 추가 갱신이 필요합니다.*
