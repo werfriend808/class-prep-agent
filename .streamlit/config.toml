@@ -1,0 +1,10 @@
+[theme]
+base = "light"
+# 차분하고 전문적인 느낌: 네이비 계열 텍스트 + 그레이 배경 + 포인트 컬러(teal) 하나.
+# app.py(실전 1)/chat_app.py(실전 2 + 종합 프로젝트) 둘 다 이 디렉토리에서
+# 실행되므로 두 앱 모두 같은 테마를 공유한다.
+primaryColor = "#0D9488"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F5F9"
+textColor = "#1E293B"
+font = "sans serif"

@@ -38,7 +38,35 @@ from src.worksheet import WorksheetError, generate_worksheet, worksheet_to_text
 
 st.set_page_config(page_title="수업계획안 챗봇", page_icon="💬", layout="centered")
 
-st.title("토의·토론 수업계획안 챗봇")
+# 시각적 다듬기(2026-08-12): 색상/폰트는 .streamlit/config.toml의 테마 설정을
+# 우선 쓰고(네이비/그레이 + teal 포인트 컬러), 테마만으로 안 되는 세부 스타일
+# (카드 느낌 테두리, 여백 등)만 최소한으로 CSS를 얹는다. data-testid 셀렉터를
+# 쓴 이유: Streamlit이 자동 생성하는 클래스 이름(css-xxxx)보다 testid가 버전
+# 업데이트에 비교적 덜 취약하다 — 그래도 공식 안정 API는 아니라서, 버전이
+# 바뀌어 셀렉터가 안 맞아도 최악의 경우 스타일만 안 먹고 기능은 그대로 동작한다.
+st.markdown(
+    """
+    <style>
+    div[data-testid="stExpander"] {
+        border: 1px solid #E2E8F0;
+        border-radius: 10px;
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    div[data-testid="stAlert"] {
+        border-radius: 8px;
+    }
+    hr {
+        margin: 0.6rem 0;
+    }
+    div[data-testid="stChatMessage"] {
+        border-radius: 12px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.title("💬 토의·토론 수업계획안 챗봇")
 st.caption(
     f"과목({', '.join(available_subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
     "근거한 토의·토론 수업계획안을 만들고 Notion에 자동으로 저장해드려요. 생성 후에도 채팅으로 "
