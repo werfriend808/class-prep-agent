@@ -191,3 +191,122 @@ class ConversationState:
         self.worksheet = None
         self.worksheet_doc_id = None
         self.worksheet_url = None
+
+
+QUIZ_SLOT_QUESTIONS = {
+    "subject": "어떤 과목의 퀴즈를 만들까요? (예: 국어, 수학, 영어, 사회, 과학, 도덕, 음악, 미술, 체육 등)",
+    "grade": "몇 학년 대상인가요? (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)",
+    "topic": "어떤 단원이나 주제를 확인하는 퀴즈로 만들까요? (예: '삼각형의 내각', '광합성')",
+}
+QUIZ_REQUIRED_SLOTS = ["subject", "grade", "topic"]
+
+
+@dataclass
+class QuizConversationState:
+    """Quiz Activity 전용 멀티턴 상태.
+
+    ConversationState(토의·토론)와 상태 전이 구조(COLLECTING -> READY ->
+    DRAFTED -> REVISING)는 같아서 extract_subject/extract_grade 같은 슬롯
+    추출 헬퍼는 그대로 재사용하지만, 클래스 자체는 따로 둔다 — 산출물이
+    퀴즈 문항 하나뿐이라(Notion+Google Docs 두 산출물을 다루는 토의·토론과
+    달리 Google Forms 하나에만 반영) 필드 구성이 다르고, lesson_plan.py/
+    worksheet.py/quiz.py가 이미 비슷한 패턴을 각자 파일로 중복해서 갖고
+    있는 것과 같은 이유로 억지로 공통 베이스 클래스를 만들기보다 이미 실제
+    사용 중이고 테스트가 다 통과하는 ConversationState를 건드리지 않는
+    쪽을 택했다.
+    """
+
+    phase: Phase = Phase.COLLECTING
+    slots: dict = field(default_factory=dict)
+    history: list[dict] = field(default_factory=list)
+    draft: dict | None = None  # quiz.generate_quiz()의 결과
+    form_id: str | None = None
+    edit_url: str | None = None
+    responder_url: str | None = None
+
+    def missing_slots(self) -> list[str]:
+        return [s for s in QUIZ_REQUIRED_SLOTS if s not in self.slots]
+
+    def next_question(self) -> str | None:
+        missing = self.missing_slots()
+        if not missing:
+            return None
+        return QUIZ_SLOT_QUESTIONS[missing[0]]
+
+    def _record(self, role: str, content: str) -> None:
+        self.history.append({"role": role, "content": content})
+
+    def handle_message(self, message: str) -> str:
+        """ConversationState.handle_message()와 동일한 구조 — 자세한 설명은 그쪽 docstring 참고."""
+        self._record("user", message)
+
+        if self.phase == Phase.COLLECTING:
+            missing = self.missing_slots()
+            if not missing:
+                self.phase = Phase.READY
+                return self._advance_and_get_reply()
+
+            current_slot = missing[0]
+            if current_slot == "subject":
+                subject = extract_subject(message)
+                if subject is None:
+                    reply = "죄송해요, 어떤 과목인지 못 알아들었어요. 국어/수학/영어/사회/과학/도덕/음악/미술/체육 등 중에서 골라주세요."
+                    self._record("assistant", reply)
+                    return reply
+                self.slots["subject"] = subject
+            elif current_slot == "grade":
+                grade = extract_grade(message)
+                if grade is None:
+                    reply = "죄송해요, 학년을 못 알아들었어요. 학교급을 포함해서 말씀해주세요 (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)."
+                    self._record("assistant", reply)
+                    return reply
+                self.slots["grade"] = grade
+            elif current_slot == "topic":
+                topic = message.strip()
+                if not topic:
+                    reply = "단원이나 주제를 조금 더 구체적으로 말씀해주시겠어요?"
+                    self._record("assistant", reply)
+                    return reply
+                self.slots["topic"] = topic
+
+            return self._advance_and_get_reply()
+
+        if self.phase == Phase.DRAFTED:
+            # 문항을 본 뒤 사용자가 뭔가 말하면 "수정 요청"으로 간주 — 퀴즈는
+            # 산출물이 하나뿐이라 ConversationState처럼 "어느 산출물을
+            # 겨냥한 건지" 분류할 필요가 없다.
+            self.slots["revision_request"] = message.strip()
+            self.phase = Phase.REVISING
+            reply = "알겠습니다. 말씀하신 내용을 반영해서 문항을 다시 만들어볼게요."
+            self._record("assistant", reply)
+            return reply
+
+        reply = "지금은 다른 처리 중이에요. 잠시만 기다려주세요."
+        self._record("assistant", reply)
+        return reply
+
+    def _advance_and_get_reply(self) -> str:
+        next_q = self.next_question()
+        if next_q is not None:
+            self._record("assistant", next_q)
+            return next_q
+        self.phase = Phase.READY
+        reply = (
+            f"{self.slots['subject']} 과목, '{self.slots['topic']}' 단원으로 "
+            f"{self.slots.get('grade', DEFAULT_GRADE)} 대상 퀴즈를 만들어볼게요. 잠시만 기다려주세요."
+        )
+        self._record("assistant", reply)
+        return reply
+
+    def apply_draft(self, draft: dict) -> None:
+        self.draft = draft
+        self.phase = Phase.DRAFTED
+        self.slots.pop("revision_request", None)
+
+    def reset(self) -> None:
+        self.phase = Phase.COLLECTING
+        self.slots = {}
+        self.draft = None
+        self.form_id = None
+        self.edit_url = None
+        self.responder_url = None

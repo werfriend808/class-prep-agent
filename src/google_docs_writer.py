@@ -9,64 +9,40 @@ REST API(google-api-python-client)로 직접 붙는다. 공식 Google Docs MCP
 REST API를 병행할 수 있다"고 명시적으로 허용하고 있어 REST API로 결정함
 (2026-08-10, [[project_class_prep_agent_stage3]] 메모리 참고).
 
-인증: OAuth 2.0 Desktop-app flow. 최초 1회 로컬 브라우저 인증 후 token.json에
-갱신 토큰을 캐시해서, 이후 실행부터는 브라우저 없이 자동 갱신된다.
-scope는 documents(문서 내용 읽기/쓰기)와 drive.file(이 앱이 만든 파일만
-접근 — 기존 드라이브 전체에 접근하는 광범위한 drive 스코프보다 안전)만 쓴다.
+인증: OAuth 2.0 Desktop-app flow(google_auth.py에 있음, forms_writer.py와
+공유). 최초 1회 로컬 브라우저 인증 후 token.json에 갱신 토큰을 캐시해서,
+이후 실행부터는 브라우저 없이 자동 갱신된다. scope는 documents(문서 내용
+읽기/쓰기)와 drive.file(이 앱이 만든 파일만 접근 — 기존 드라이브 전체에
+접근하는 광범위한 drive 스코프보다 안전)만 쓴다.
 """
 from __future__ import annotations
 
-import os
 from typing import Any
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from .config import GOOGLE_CREDENTIALS_PATH, GOOGLE_DOCS_FOLDER_ID, GOOGLE_TOKEN_PATH
-
-SCOPES = [
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/drive.file",
-]
+from .config import GOOGLE_DOCS_FOLDER_ID
+from .google_auth import GoogleAuthError, get_credentials
 
 
 class GoogleDocsWriteError(RuntimeError):
     """문서 생성/본문 작성 실패를 UI에 알리기 위한 예외."""
 
 
-def get_credentials() -> Credentials:
-    """token.json이 있으면 재사용(+필요시 자동 갱신), 없으면 최초 1회 로컬 브라우저 인증을 띄운다."""
-    creds: Credentials | None = None
-    if os.path.exists(GOOGLE_TOKEN_PATH):
-        creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_PATH, SCOPES)
-
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            if not os.path.exists(GOOGLE_CREDENTIALS_PATH):
-                raise GoogleDocsWriteError(
-                    f"{GOOGLE_CREDENTIALS_PATH}가 없습니다. Google Cloud Console에서 "
-                    "OAuth 클라이언트(데스크톱 앱)를 만들고 다운로드한 JSON을 "
-                    "이 경로에 저장해주세요."
-                )
-            flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(GOOGLE_TOKEN_PATH, "w", encoding="utf-8") as f:
-            f.write(creds.to_json())
-
-    return creds
+def _credentials_or_raise():
+    try:
+        return get_credentials()
+    except GoogleAuthError as exc:
+        raise GoogleDocsWriteError(str(exc)) from exc
 
 
 def _drive_service():
-    return build("drive", "v3", credentials=get_credentials())
+    return build("drive", "v3", credentials=_credentials_or_raise())
 
 
 def _docs_service():
-    return build("docs", "v1", credentials=get_credentials())
+    return build("docs", "v1", credentials=_credentials_or_raise())
 
 
 def _doc_metadata(title: str, folder_id: str | None, default_folder_id: str) -> dict[str, Any]:

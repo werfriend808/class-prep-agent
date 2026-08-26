@@ -109,11 +109,20 @@ def match_standards(
         grade: "고1"처럼 구체적인 학년. `grade_bands_for()`로 데이터셋의
             학년군 라벨(예: "고등학교 공통")로 변환한 뒤 필터링한다.
         keywords: 수업 주제에서 뽑은 핵심어(예: ["환경", "토론"]). 주어지면
-            성취기준 텍스트에 포함된 키워드 개수로 점수를 매겨 정렬한다.
-            키워드가 하나도 안 걸리면(주제가 성취기준 문구와 안 겹치는 경우)
-            빈 리스트 대신 해당 과목의 성취기준을 그대로 상위 limit개 반환한다
-            — "관련 성취기준을 못 찾았다"보다는 "과목 내에서 참고할 만한 것들"을
-            보여주는 게 수업계획안 생성에는 더 유용하기 때문.
+            성취기준 텍스트에 포함된 키워드 개수로 점수를 매겨, 점수가 0보다
+            큰 것만 정렬해서 반환한다. 키워드를 하나도 못 뽑았으면(`keywords`가
+            비어있거나 None) 이 필터링 자체를 건너뛰고 해당 과목의 성취기준을
+            그대로 상위 limit개 반환한다 — 애초에 검색할 단서가 없는 경우다.
+
+            2026-08-26: 원래는 키워드가 있는데도 전부 0점이면(성취기준 문구와
+            안 겹치는 주제, 예: 영어 "문법") 빈 리스트 대신 해당 과목 성취기준을
+            그대로 상위 limit개 반환했었다 — "관련 성취기준을 못 찾았다"보다는
+            "과목 내 아무거나라도"가 낫다는 생각이었는데, 실제로는 완전히 무관한
+            성취기준이 LLM 프롬프트에 "참고 자료"로 섞여 들어가 생성 품질을
+            해치는 문제가 실사용 중 발견됐다(quiz.py에서 처음 발견, README
+            18-6-2/13-7 참고). 이제는 점수가 0보다 큰 게 하나도 없으면 빈
+            리스트를 그대로 반환한다 — 호출하는 쪽이 "관련 성취기준 없음"으로
+            정직하게 표시한다.
         limit: 반환할 최대 개수.
     """
     standards = load_standards()
@@ -130,9 +139,7 @@ def match_standards(
     def score(record: dict) -> int:
         return sum(1 for kw in keywords if kw and kw in record["text"])
 
-    scored = [(score(s), s) for s in candidates]
-    if any(sc > 0 for sc, _ in scored):
-        scored = [pair for pair in scored if pair[0] > 0]
+    scored = [(sc, s) for s in candidates if (sc := score(s)) > 0]
     scored.sort(key=lambda pair: pair[0], reverse=True)
     return [s for _, s in scored[:limit]]
 

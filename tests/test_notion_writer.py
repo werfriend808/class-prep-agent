@@ -30,20 +30,23 @@ def _sample_plan() -> dict:
     }
 
 
+# 2026-08-26: 한 번 완전히 제거했다가(README 13-7 참고) 강사가 보는 자료에는
+# 근거가 필요하다는 판단으로 토의·토론에 한해 다시 복원했다(README 13-8 참고).
+# Quiz는 여전히 NCIC 근거를 쓰지 않는다.
 def test_plan_to_markdown_includes_all_sections():
     md = plan_to_markdown(_sample_plan())
     assert "환경 보전과 개발" in md
     assert "## 자료 개요" in md
     assert "## 평가 루브릭" in md
     assert "## NCIC 교육과정 근거" in md
-    assert "10통사1-01-01" in md
+    assert "[10통사1-01-01]" in md
 
 
-def test_plan_to_markdown_omits_references_section_when_empty():
+def test_plan_to_markdown_omits_ncic_section_when_no_references():
     plan = _sample_plan()
     plan["ncic_references"] = []
     md = plan_to_markdown(plan)
-    assert "NCIC 교육과정 근거" not in md
+    assert "NCIC" not in md
 
 
 def test_extract_page_id_from_dict():

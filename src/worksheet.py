@@ -7,9 +7,7 @@ lesson_plan.py가 만든 수업계획안(dict)을 입력으로 받아, 학생이
 새로 확장 생성한다.
 
 lesson_plan.py와 마찬가지로 llm.complete()를 통해 호출하므로 .env의
-LLM_PROVIDER 설정을 그대로 따른다. NCIC 근거는 계획안 단계에서 이미 확정된
-것을 그대로 재사용하고 여기서 새로 매칭하지 않는다 — 같은 수업의 계획안과
-활동지 사이에서 근거가 서로 달라지면 안 되기 때문이다.
+LLM_PROVIDER 설정을 그대로 따른다.
 """
 from __future__ import annotations
 

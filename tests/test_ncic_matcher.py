@@ -72,9 +72,20 @@ def test_match_standards_keyword_scoring_orders_relevant_first():
     assert all("환경" in r["text"] for r in results)
 
 
-def test_match_standards_falls_back_to_candidates_when_no_keyword_matches():
-    # 존재하지 않을 법한 키워드 -> 빈 결과 대신 해당 과목 후보를 그대로 반환해야 한다.
+# 2026-08-26: 원래는 키워드가 하나도 안 걸리면 무관한 후보를 그대로 채워서
+# 반환했는데(quiz.py 실사용 중 이게 프롬프트 오염 원인으로 드러남 — README
+# 18-6-2/13-7), 이제는 빈 리스트를 반환한다. "keywords 자체가 없음"(None/빈
+# 리스트)과는 다른 경로라는 걸 구분하려고 두 테스트로 나눴다.
+def test_match_standards_returns_empty_when_keywords_given_but_none_match():
     results = match_standards("수학", grade="고1", keywords=["존재하지않는키워드짜리"], limit=2)
+    assert results == []
+
+
+def test_match_standards_returns_top_candidates_when_no_keywords_given():
+    # keywords 자체를 안 넘기면(주제에서 뽑을 키워드가 아예 없던 경우) 검색할
+    # 단서가 없다는 뜻이라 필터링 없이 해당 과목 후보를 그대로 반환한다 —
+    # test_match_standards_respects_limit()과 같은 경로.
+    results = match_standards("수학", grade="고1", keywords=None, limit=2)
     assert len(results) == 2
     assert all(r["subject"] == "수학" for r in results)
 

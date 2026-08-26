@@ -21,6 +21,10 @@ from src.lesson_plan import (
 )
 
 
+# 2026-08-26: NCIC 근거 기능을 한때 완전히 제거했다가(quiz.py의 영어 "문법" 사고),
+# 강사용 자료엔 필요하다고 판단해 토의·토론에는 복원했다 — 다만 원인이었던
+# match_standards()의 폴백을 먼저 고쳤다(매칭 0건이면 빈 리스트, ncic_matcher.py
+# 참고). README 13-7에 경위를 정리했다.
 def test_extract_keywords_dedupes_and_filters_short_tokens():
     keywords = extract_keywords("환경 환경 보전과 개발 중 무엇을 우선해야 하는가")
     assert keywords.count("환경") == 1  # 중복 제거
