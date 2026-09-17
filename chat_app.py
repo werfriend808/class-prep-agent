@@ -35,11 +35,11 @@ import asyncio
 import streamlit as st
 
 from src.conversation import ConversationState, Phase, QuizConversationState
+from src.curriculum import get_provider
 from src.edit_propagation import classify_edit_target, worksheet_needs_update
 from src.forms_writer import FormsWriteError, create_quiz_form, replace_quiz_questions
 from src.google_docs_writer import GoogleDocsWriteError, create_and_write_doc, replace_doc_body
 from src.lesson_plan import LessonPlanError, generate_lesson_plan
-from src.ncic_matcher import available_subjects
 from src.notion_writer import NotionWriteError, save_lesson_plan_to_notion, update_lesson_plan_in_notion
 from src.quiz import QuizError, generate_quiz
 from src.worksheet import WorksheetError, generate_worksheet, worksheet_to_text
@@ -223,7 +223,7 @@ def _render_discussion_activity() -> None:
     conv: ConversationState = st.session_state.conv
 
     st.caption(
-        f"과목({', '.join(available_subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
+        f"과목({', '.join(get_provider().subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
         "근거한 토의·토론 수업계획안을 만들고 Notion에 자동으로 저장해드려요. 생성 후에도 채팅으로 "
         "계속 수정을 요청할 수 있고, 원하면 학생 활동지도 만들어서 Google Docs에 저장할 수 있어요."
     )
@@ -380,7 +380,7 @@ def _render_quiz_activity() -> None:
     quiz_conv: QuizConversationState = st.session_state.quiz_conv
 
     st.caption(
-        f"과목({', '.join(available_subjects())}), 학년, 확인하고 싶은 단원/주제를 알려주시면 "
+        f"과목({', '.join(get_provider().subjects())}), 학년, 확인하고 싶은 단원/주제를 알려주시면 "
         "객관식 퀴즈(기본 4지선다, 보기 개수는 채팅으로 조정 가능)를 만들고 Google Forms에 "
         "자동으로 저장해드려요(정답 자동 채점 포함). 생성 후에도 채팅으로 계속 수정을 요청할 수 있어요."
     )
