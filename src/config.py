@@ -39,6 +39,10 @@ GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
 # 학생 활동지 Google Doc을 만들 때 넣어줄 Drive 폴더 ID (선택). 비어있으면 내 드라이브 최상위에 생성.
 GOOGLE_DOCS_FOLDER_ID = os.getenv("GOOGLE_DOCS_FOLDER_ID", "")
 
+# 교육과정 provider 선택 ("ncic"만 존재 — Phase 2에서 미국 Common Core Math 등
+# 추가 예정, src/curriculum/__init__.py의 get_provider() 참고).
+CURRICULUM_PROVIDER = os.getenv("CURRICULUM_PROVIDER", "ncic")
+
 if not NOTION_API_KEY:
     raise RuntimeError(
         ".env에 NOTION_API_KEY가 설정되어 있지 않습니다. "
