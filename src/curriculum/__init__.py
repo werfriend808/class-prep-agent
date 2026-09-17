@@ -1,19 +1,23 @@
 """교육과정 CurriculumProvider 레지스트리 + 선택.
 
-2026-09-17 (Phase 1): 지금은 NCIC(한국) 하나뿐이라 `get_provider()`는 사실상
-`NCICProvider` 고정 반환이다. Phase 2에서 미국 Common Core Math provider가
-추가되면 `_PROVIDERS`에 등록하고 `.env`의 `CURRICULUM_PROVIDER`로 고르게 한다
-— 그 전까지는 이 파일을 거치는 모든 호출부가 지금과 똑같이 NCIC 결과를
-받는다(동작 변경 없음).
+2026-09-17 (Phase 1): 처음엔 NCIC(한국) 하나뿐이라 `get_provider()`가 사실상
+`NCICProvider` 고정 반환이었다.
+
+2026-09-17 (Phase 2): 미국 Common Core Math provider(`CommonCoreMathProvider`)를
+추가해 `_PROVIDERS`에 등록했다. 기본값(`.env`에 `CURRICULUM_PROVIDER`가 없을
+때)은 여전히 "ncic"라 기존 호출부는 동작이 안 바뀐다 — `.env`에
+`CURRICULUM_PROVIDER=common_core_math`를 설정해야 새 provider가 쓰인다.
 """
 from __future__ import annotations
 
 from ..config import CURRICULUM_PROVIDER
 from .base import CurriculumProvider
+from .common_core_math_provider import CommonCoreMathProvider
 from .ncic_provider import NCICProvider
 
 _PROVIDERS: dict[str, type[CurriculumProvider]] = {
     "ncic": NCICProvider,
+    "common_core_math": CommonCoreMathProvider,
 }
 
 
@@ -32,4 +36,4 @@ def get_provider(name: str | None = None) -> CurriculumProvider:
     return provider_cls()
 
 
-__all__ = ["CurriculumProvider", "NCICProvider", "get_provider"]
+__all__ = ["CurriculumProvider", "NCICProvider", "CommonCoreMathProvider", "get_provider"]

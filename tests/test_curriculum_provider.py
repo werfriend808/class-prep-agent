@@ -8,8 +8,13 @@
 """
 import pytest
 
-from src import ncic_matcher
-from src.curriculum import CurriculumProvider, NCICProvider, get_provider
+from src import common_core_math_matcher, ncic_matcher
+from src.curriculum import (
+    CommonCoreMathProvider,
+    CurriculumProvider,
+    NCICProvider,
+    get_provider,
+)
 
 
 def test_get_provider_defaults_to_ncic():
@@ -25,7 +30,7 @@ def test_get_provider_accepts_explicit_name():
 
 def test_get_provider_raises_on_unknown_name():
     with pytest.raises(ValueError, match="ncic"):
-        get_provider("common_core_math")  # 아직 등록 안 됨 (Phase 2에서 추가 예정)
+        get_provider("common_core_ela")  # 아직 등록 안 됨 (Math만 있음, README 참고)
 
 
 def test_curriculum_provider_cannot_be_instantiated_directly():
@@ -66,3 +71,47 @@ def test_ncic_provider_format_citation_matches_ncic_matcher():
         "source_doc": "[별책7] 사회과 교육과정.pdf",
     }
     assert NCICProvider().format_citation(record) == ncic_matcher.format_citation(record)
+
+
+# 2026-09-17 (Phase 2): CommonCoreMathProvider도 NCICProvider와 같은 방식으로
+# common_core_math_matcher.py를 그대로 위임하는지 확인한다.
+def test_get_provider_returns_common_core_math_by_explicit_name():
+    provider = get_provider("common_core_math")
+    assert isinstance(provider, CommonCoreMathProvider)
+    assert provider.id == "common_core_math"
+
+
+def test_common_core_math_provider_subjects_matches_matcher():
+    assert CommonCoreMathProvider().subjects() == common_core_math_matcher.available_subjects()
+
+
+def test_common_core_math_provider_grade_groups_for_matches_matcher():
+    provider = CommonCoreMathProvider()
+    for grade in ("K", "3", "10", "존재하지않는학년"):
+        assert provider.grade_groups_for(grade) == common_core_math_matcher.grade_groups_for(grade)
+
+
+def test_common_core_math_provider_match_standards_delegates_with_same_results():
+    provider = CommonCoreMathProvider()
+    direct = common_core_math_matcher.match_standards(
+        "Math", grade="Grade 4", keywords=["fraction"], limit=5
+    )
+    via_provider = provider.match_standards("Math", grade="Grade 4", keywords=["fraction"], limit=5)
+    assert via_provider == direct
+    assert via_provider
+
+
+def test_common_core_math_provider_match_standards_default_grade_matches_matcher_default():
+    provider = CommonCoreMathProvider()
+    assert provider.match_standards("Math") == common_core_math_matcher.match_standards("Math")
+
+
+def test_common_core_math_provider_format_citation_matches_matcher():
+    record = {
+        "code": "6.G.1",
+        "text": "some standard text",
+        "source_doc": "Common Core State Standards for Mathematics",
+    }
+    assert CommonCoreMathProvider().format_citation(record) == common_core_math_matcher.format_citation(
+        record
+    )
