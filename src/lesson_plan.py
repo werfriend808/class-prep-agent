@@ -19,14 +19,20 @@ LLM이 지어내지 않도록 우리 쪽 데이터(ncic_matcher)에서 직접 �
 자세한 내용은 llm.py 참고. 어느 쪽이든 크레딧/사용량이 있어야 동작한다.
 크레딧이 없으면 LessonPlanError를 그대로 올려서 UI에서 안내 메시지로 보여준다
 (실전 1의 요약과 달리 "계획안 생성" 자체가 핵심 기능이라 의미 있는 폴백이 없다).
+
+2026-09-17: NCIC 근거 조회를 `ncic_matcher.match_standards()`/`format_citation()`
+직접 호출에서 `curriculum.CurriculumProvider`(기본 `NCICProvider`)를 통한 호출로
+바꿨다 — 영어/Common Core Math provider를 추가해도 이 함수는 안 바뀌게 하려는
+목적이고, 기본 provider가 그대로 NCIC라 동작은 바뀌지 않는다(`get_provider()`
+참고).
 """
 from __future__ import annotations
 
 import json
 import re
 
+from .curriculum import CurriculumProvider, get_provider
 from .llm import complete
-from .ncic_matcher import format_citation, match_standards
 
 PLAN_SECTIONS = [
     "자료_개요",
@@ -93,6 +99,7 @@ def generate_lesson_plan(
     topic: str,
     grade: str = "고1",
     revision_request: str | None = None,
+    provider: CurriculumProvider | None = None,
 ) -> dict:
     """토의·토론 수업계획안을 생성한다.
 
@@ -104,8 +111,9 @@ def generate_lesson_plan(
     현상이 있어(worksheet.py에서 실제로 겪고 고친 것과 같은 종류), 실패하면
     한 번만 자동으로 재시도한다. 재시도까지 실패하면 그대로 올린다.
     """
+    provider = provider or get_provider()
     keywords = extract_keywords(topic)
-    ncic_records = match_standards(subject, grade=grade, keywords=keywords, limit=5)
+    ncic_records = provider.match_standards(subject, grade=grade, keywords=keywords, limit=5)
 
     prompt = _build_prompt(subject, grade, topic, ncic_records, revision_request)
 
@@ -114,7 +122,7 @@ def generate_lesson_plan(
     except LessonPlanError:
         plan = _generate_once(prompt)
 
-    plan["ncic_references"] = [format_citation(r) for r in ncic_records]
+    plan["ncic_references"] = [provider.format_citation(r) for r in ncic_records]
     plan["subject"] = subject
     plan["grade"] = grade
     plan["topic"] = topic

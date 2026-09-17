@@ -10,6 +10,7 @@ lesson_plan.py 입장에서는 complete(prompt, max_tokens) -> str 하나만 보
 import json
 
 import src.lesson_plan as lesson_plan
+from src.curriculum import CurriculumProvider
 from src.lesson_plan import (
     PLAN_SECTIONS,
     LessonPlanError,
@@ -103,6 +104,47 @@ def test_parse_plan_json_raises_on_missing_sections():
         assert "수업_목표" in str(e)
     else:
         raise AssertionError("LessonPlanError가 발생해야 함")
+
+
+# 2026-09-17: generate_lesson_plan()이 이제 CurriculumProvider를 통해 NCIC 근거를
+# 조회한다(직접 ncic_matcher를 부르지 않음) — provider를 주입할 수 있어야
+# Common Core Math provider가 생겨도 이 함수가 그대로 재사용 가능하다는 걸
+# 확인해 둔다. 실제 매칭 로직 자체는 test_curriculum_provider.py에서 검증한다.
+class _FakeProvider(CurriculumProvider):
+    id = "fake"
+
+    def __init__(self):
+        self.match_calls: list[tuple] = []
+
+    def subjects(self):
+        return ["가짜과목"]
+
+    def grade_groups_for(self, grade):
+        return [grade]
+
+    def match_standards(self, subject, grade="고1", keywords=None, limit=5):
+        self.match_calls.append((subject, grade, tuple(keywords or []), limit))
+        return [{"code": "FAKE-1", "text": "가짜 성취기준"}]
+
+    def format_citation(self, record):
+        return f"인용:{record['code']}"
+
+
+def test_generate_lesson_plan_uses_injected_provider():
+    fake_text = _fake_plan_json()
+
+    provider = _FakeProvider()
+    original = lesson_plan.complete
+    lesson_plan.complete = lambda prompt, max_tokens=2000: fake_text
+    try:
+        plan = generate_lesson_plan(
+            subject="사회", topic="환경 보전", grade="고1", provider=provider
+        )
+    finally:
+        lesson_plan.complete = original
+
+    assert provider.match_calls == [("사회", "고1", ("환경", "보전"), 5)]
+    assert plan["ncic_references"] == ["인용:FAKE-1"]
 
 
 def test_generate_lesson_plan_success():
