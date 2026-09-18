@@ -29,11 +29,19 @@ Activity 선택 화면(스펙 필수 UI 요소) 하나에서 두 Activity를 고
 주의: 계획안/활동지/퀴즈 문항 "생성" 자체는 LLM 호출이라(.env의 LLM_PROVIDER에
 따라 Claude 또는 네이버 클로바) 크레딧/사용량이 없으면 이 부분만 막힌다. 대화
 흐름과 Notion/Docs/Forms 반영 자체는 크레딧과 무관하게 동작한다.
+
+2026-09-17 (Phase 3, 영어/미국 버전 첫 단계): `.env`의 `LOCALE=us`로 실행하면
+이 화면 전체가 영어 버전으로 바뀐다 — Activity 선택 자체를 건너뛰고 토의·토론
+계획안 생성 흐름만(영어 프롬프트 + Common Core Math 성취기준 근거 + Notion
+저장) 보여준다. 학생 활동지(Google Docs)와 Quiz Activity는 아직 한국어
+전용이라(worksheet.py/quiz.py 미번역) 이번 범위에서 뺐다 — 영어 화면에
+반쯤 번역된 한국어 기능이 섞여 나오는 것보다 아예 안 보여주는 쪽을 택했다.
 """
 import asyncio
 
 import streamlit as st
 
+from src.config import LOCALE
 from src.conversation import ConversationState, Phase, QuizConversationState
 from src.curriculum import get_provider
 from src.edit_propagation import classify_edit_target, worksheet_needs_update
@@ -44,7 +52,11 @@ from src.notion_writer import NotionWriteError, save_lesson_plan_to_notion, upda
 from src.quiz import QuizError, generate_quiz
 from src.worksheet import WorksheetError, generate_worksheet, worksheet_to_text
 
-st.set_page_config(page_title="AI 수업 활동 에이전트", page_icon="💬", layout="centered")
+st.set_page_config(
+    page_title="AI Lesson Planning Agent" if LOCALE == "us" else "AI 수업 활동 에이전트",
+    page_icon="💬",
+    layout="centered",
+)
 
 # 시각적 다듬기(2026-08-12): 색상/폰트는 .streamlit/config.toml의 테마 설정을
 # 우선 쓰고(네이비/그레이 + teal 포인트 컬러), 테마만으로 안 되는 세부 스타일
@@ -74,10 +86,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("💬 AI 수업 활동 에이전트")
-
-ACTIVITIES = ["토의·토론", "Quiz"]
-activity = st.radio("Activity 선택", ACTIVITIES, horizontal=True, key="activity")
+if LOCALE == "us":
+    st.title("💬 AI Lesson Planning Agent")
+    activity = None  # Activity 선택 자체가 없다 — 아래 라우팅에서 영어 흐름 하나만 렌더링.
+else:
+    st.title("💬 AI 수업 활동 에이전트")
+    ACTIVITIES = ["토의·토론", "Quiz"]
+    activity = st.radio("Activity 선택", ACTIVITIES, horizontal=True, key="activity")
 st.divider()
 
 PLAN_SECTION_TITLES = {
@@ -98,6 +113,18 @@ WORKSHEET_SECTION_TITLES = {
     "개인_의견_작성란": "개인 의견 작성란",
     "모둠_토의_기록표": "모둠 토의 기록표",
     "소감_정리": "소감 정리",
+}
+
+# 2026-09-17 (Phase 3): 영어/미국 버전용 섹션 제목.
+PLAN_SECTION_TITLES_US = {
+    "overview": "Overview",
+    "objectives": "Objectives",
+    "background_reading": "Background Reading",
+    "key_concepts": "Key Concepts",
+    "discussion_issues": "Discussion Issues",
+    "lesson_flow": "Lesson Flow",
+    "sample_worksheet": "Sample Worksheet",
+    "assessment_rubric": "Assessment Rubric",
 }
 
 
@@ -320,6 +347,110 @@ def _render_discussion_activity() -> None:
 
 
 # ============================================================
+# 토의·토론 Activity — 영어/미국 버전 (Phase 3, LOCALE=us)
+# ============================================================
+#
+# 한국어 버전(_render_discussion_activity)과 상태 전이 구조는 완전히 같지만,
+# 함수를 따로 둔 이유: (1) 학생 활동지(worksheet.py) 버튼처럼 이번 범위 밖인
+# 기능을 아예 안 보여줘야 해서 화면 구성 자체가 다르고, (2) 문자열이 전부
+# 영어라 한 함수 안에서 조건 분기로 섞으면 오히려 읽기 어려워진다. 상태
+# 전이 로직(ConversationState.handle_message)은 locale로 분기해서 재사용하고
+# 있으니 중복은 렌더링 부분(Streamlit 위젯 배치)에만 있다.
+
+
+def _run_generation_us(conv: ConversationState, revision_request: str | None = None) -> bool:
+    """_run_generation()의 영어 버전. 학생 활동지 동기화는 없다(이번 범위 밖)."""
+    slots = conv.slots
+    try:
+        with st.spinner("Generating the lesson plan..."):
+            plan = generate_lesson_plan(
+                subject=slots["subject"],
+                topic=slots["topic"],
+                grade=slots.get("grade", "8"),
+                revision_request=revision_request,
+                locale="us",
+            )
+    except LessonPlanError as e:
+        st.error(str(e))
+        if conv.draft is not None:
+            conv.phase = Phase.DRAFTED
+        return False
+
+    conv.apply_draft(plan)
+    _sync_notion(conv, plan)
+    return True
+
+
+def _render_discussion_activity_us() -> None:
+    if "conv_us" not in st.session_state:
+        st.session_state.conv_us = ConversationState(locale="us")
+        st.session_state.conv_us.history.append(
+            {"role": "assistant", "content": st.session_state.conv_us.next_question()}
+        )
+    conv: ConversationState = st.session_state.conv_us
+
+    st.caption(
+        f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and topic, "
+        "and I'll put together a discussion-based lesson plan grounded in Common Core standards and save it "
+        "to Notion. After it's generated, you can keep asking for revisions in the chat."
+    )
+
+    for msg in conv.history:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    user_input = st.chat_input("Type a message", key="discussion_chat_input_us")
+    if user_input:
+        with st.chat_message("user"):
+            st.write(user_input)
+        reply = conv.handle_message(user_input)
+        with st.chat_message("assistant"):
+            st.write(reply)
+        st.rerun()
+
+    if conv.phase == Phase.READY:
+        if _run_generation_us(conv):
+            st.rerun()
+
+    if conv.phase == Phase.REVISING:
+        revision_request = conv.slots.get("revision_request", "")
+        if _run_generation_us(conv, revision_request=revision_request):
+            st.rerun()
+
+    if conv.phase == Phase.DRAFTED and conv.draft:
+        plan = conv.draft
+        st.divider()
+        st.subheader(f"{plan['topic']} — {plan['subject']} Discussion Lesson Plan")
+
+        for key, label in PLAN_SECTION_TITLES_US.items():
+            with st.expander(label, expanded=(key in ("overview", "objectives"))):
+                st.write(plan.get(key, ""))
+
+        if plan.get("standards_references"):
+            with st.expander("Common Core Standards", expanded=False):
+                for ref in plan["standards_references"]:
+                    st.write(f"- {ref}")
+
+        if conv.notion_url:
+            st.success(f"Saved to Notion: [{conv.notion_url}]({conv.notion_url})")
+        else:
+            st.warning("Not yet saved to Notion — check the error message above.")
+
+        st.divider()
+        if st.button("Start over", key="reset_us"):
+            conv.reset()
+            conv.history.append({"role": "assistant", "content": conv.next_question()})
+            st.rerun()
+
+        st.caption(
+            "Type any revision requests in the chat above (e.g. 'shorten the discussion issues to "
+            "3 items', 'make the lesson flow fit a 30-minute class'). Revisions are saved back to the "
+            "same Notion page. (Student worksheet and Quiz features aren't available in this English "
+            "version yet.)"
+        )
+
+
+# ============================================================
 # Quiz Activity
 # ============================================================
 
@@ -441,7 +572,9 @@ def _render_quiz_activity() -> None:
 # Activity 라우팅
 # ============================================================
 
-if activity == "토의·토론":
+if LOCALE == "us":
+    _render_discussion_activity_us()
+elif activity == "토의·토론":
     _render_discussion_activity()
 else:
     _render_quiz_activity()
