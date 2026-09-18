@@ -94,3 +94,61 @@ def test_reset_clears_state():
     assert conv.form_id is None
     assert conv.edit_url is None
     assert conv.responder_url is None
+
+
+# 2026-09-18: locale="us" 경로 -- test_conversation.py의 ConversationState US 테스트와
+# 같은 시나리오를 QuizConversationState에도 대응시켰다.
+def test_quiz_conversation_state_us_locale_initial_question_is_english():
+    conv = QuizConversationState(locale="us")
+    assert "subject" in conv.next_question().lower()
+
+
+def test_quiz_conversation_state_us_locale_full_flow_to_ready():
+    conv = QuizConversationState(locale="us")
+    conv.handle_message("Math")
+    assert conv.slots["subject"] == "Math"
+
+    reply = conv.handle_message("Grade 5")
+    assert conv.slots["grade"] == "5"
+    assert "unit" in reply.lower() or "topic" in reply.lower()
+
+    conv.handle_message("Fractions")
+    assert conv.phase == Phase.READY
+    assert conv.slots["topic"] == "Fractions"
+
+
+def test_quiz_conversation_state_us_locale_unrecognized_subject_reprompts_in_english():
+    conv = QuizConversationState(locale="us")
+    reply = conv.handle_message("something totally unrelated")
+    assert conv.phase == Phase.COLLECTING
+    assert "subject" not in conv.slots
+    assert "Math" in reply
+
+
+def test_quiz_conversation_state_us_locale_unrecognized_grade_reprompts_in_english():
+    conv = QuizConversationState(locale="us")
+    conv.handle_message("Math")
+    reply = conv.handle_message("no idea")
+    assert conv.phase == Phase.COLLECTING
+    assert "grade" not in conv.slots
+    assert "grade" in reply.lower()
+
+
+def test_quiz_conversation_state_us_locale_drafted_message_becomes_revision_request():
+    conv = QuizConversationState(locale="us")
+    conv.handle_message("Math")
+    conv.handle_message("Grade 5")
+    conv.handle_message("fractions")
+    conv.apply_draft({"questions": []})
+    assert conv.phase == Phase.DRAFTED
+
+    reply = conv.handle_message("make it easier")
+    assert conv.phase == Phase.REVISING
+    assert conv.slots["revision_request"] == "make it easier"
+    assert "revise" in reply.lower()
+
+
+def test_quiz_conversation_state_ko_locale_is_default_and_unaffected():
+    conv = QuizConversationState()
+    assert conv.locale == "ko"
+    assert "과목" in conv.next_question()

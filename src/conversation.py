@@ -18,9 +18,13 @@
 필드를 추가해 "us"일 때는 영어 슬롯 질문/응답(`extract_subject_us`,
 `extract_grade_us`, `SLOT_QUESTIONS_US`)을 쓰도록 분기했다. 기존 한국어
 경로(`locale` 기본값 "ko")는 이 파일의 다른 함수/상수를 하나도 안 바꿔서
-동작이 그대로다. QuizConversationState는 이번 범위 밖이라(오늘은 토의·토론
-흐름만 영어로 만들기로 함) 그대로 한국어 전용 extract_subject/extract_grade를
-쓴다.
+동작이 그대로다.
+
+2026-09-18: QuizConversationState에도 같은 방식으로 `locale` 필드를 추가했다
+(worksheet/Quiz 영어 버전 확장 phase) — Quiz 슬롯 수집 흐름도 이제 "us"에서는
+영어 질문/응답(`extract_subject_us`, `extract_grade_us`, `QUIZ_SLOT_QUESTIONS_US`)을
+쓴다. ConversationState와 마찬가지로 기본값 "ko"는 기존 함수를 그대로 써서
+동작이 안 바뀐다.
 """
 from __future__ import annotations
 
@@ -312,6 +316,15 @@ QUIZ_SLOT_QUESTIONS = {
 }
 QUIZ_REQUIRED_SLOTS = ["subject", "grade", "topic"]
 
+# 2026-09-18: US-locale (English/Common Core Math) slot questions for the Quiz flow --
+# same pattern as SLOT_QUESTIONS_US above, reusing extract_subject_us/extract_grade_us.
+QUIZ_SLOT_QUESTIONS_US = {
+    "subject": "What subject would you like to make a quiz for? (Math is currently supported.)",
+    "grade": "What grade level is this for? (e.g. Kindergarten, Grade 3, 9th grade / freshman)",
+    "topic": "What unit or topic should the quiz check understanding of? "
+    "(e.g. 'triangle interior angles', 'photosynthesis')",
+}
+
 
 @dataclass
 class QuizConversationState:
@@ -328,6 +341,7 @@ class QuizConversationState:
     쪽을 택했다.
     """
 
+    locale: str = "ko"  # "ko"(default, NCIC) | "us"(Common Core Math, 2026-09-18)
     phase: Phase = Phase.COLLECTING
     slots: dict = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
@@ -343,14 +357,20 @@ class QuizConversationState:
         missing = self.missing_slots()
         if not missing:
             return None
-        return QUIZ_SLOT_QUESTIONS[missing[0]]
+        questions = QUIZ_SLOT_QUESTIONS_US if self.locale == "us" else QUIZ_SLOT_QUESTIONS
+        return questions[missing[0]]
 
     def _record(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
 
     def handle_message(self, message: str) -> str:
-        """ConversationState.handle_message()와 동일한 구조 — 자세한 설명은 그쪽 docstring 참고."""
+        """ConversationState.handle_message()와 동일한 구조 — 자세한 설명은 그쪽 docstring 참고.
+
+        2026-09-18: ConversationState와 마찬가지로 `self.locale`에 따라 슬롯 추출
+        함수/응답 문구만 영어·한국어로 갈라진다 — 상태 전이 로직 자체는 그대로 하나다.
+        """
         self._record("user", message)
+        is_us = self.locale == "us"
 
         if self.phase == Phase.COLLECTING:
             missing = self.missing_slots()
@@ -360,23 +380,37 @@ class QuizConversationState:
 
             current_slot = missing[0]
             if current_slot == "subject":
-                subject = extract_subject(message)
+                subject = extract_subject_us(message) if is_us else extract_subject(message)
                 if subject is None:
-                    reply = "죄송해요, 어떤 과목인지 못 알아들었어요. 국어/수학/영어/사회/과학/도덕/음악/미술/체육 등 중에서 골라주세요."
+                    reply = (
+                        f"Sorry, I couldn't recognize the subject. Currently supported: "
+                        f"{', '.join(get_provider('common_core_math').subjects())}."
+                        if is_us
+                        else "죄송해요, 어떤 과목인지 못 알아들었어요. 국어/수학/영어/사회/과학/도덕/음악/미술/체육 등 중에서 골라주세요."
+                    )
                     self._record("assistant", reply)
                     return reply
                 self.slots["subject"] = subject
             elif current_slot == "grade":
-                grade = extract_grade(message)
+                grade = extract_grade_us(message) if is_us else extract_grade(message)
                 if grade is None:
-                    reply = "죄송해요, 학년을 못 알아들었어요. 학교급을 포함해서 말씀해주세요 (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)."
+                    reply = (
+                        "Sorry, I couldn't understand the grade level. Please specify it clearly "
+                        "(e.g. Kindergarten, Grade 3, 9th grade)."
+                        if is_us
+                        else "죄송해요, 학년을 못 알아들었어요. 학교급을 포함해서 말씀해주세요 (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)."
+                    )
                     self._record("assistant", reply)
                     return reply
                 self.slots["grade"] = grade
             elif current_slot == "topic":
                 topic = message.strip()
                 if not topic:
-                    reply = "단원이나 주제를 조금 더 구체적으로 말씀해주시겠어요?"
+                    reply = (
+                        "Could you be a bit more specific about the unit or topic?"
+                        if is_us
+                        else "단원이나 주제를 조금 더 구체적으로 말씀해주시겠어요?"
+                    )
                     self._record("assistant", reply)
                     return reply
                 self.slots["topic"] = topic
@@ -389,11 +423,19 @@ class QuizConversationState:
             # 겨냥한 건지" 분류할 필요가 없다.
             self.slots["revision_request"] = message.strip()
             self.phase = Phase.REVISING
-            reply = "알겠습니다. 말씀하신 내용을 반영해서 문항을 다시 만들어볼게요."
+            reply = (
+                "Got it — I'll revise the questions based on your feedback."
+                if is_us
+                else "알겠습니다. 말씀하신 내용을 반영해서 문항을 다시 만들어볼게요."
+            )
             self._record("assistant", reply)
             return reply
 
-        reply = "지금은 다른 처리 중이에요. 잠시만 기다려주세요."
+        reply = (
+            "I'm currently processing something else. Please wait a moment."
+            if is_us
+            else "지금은 다른 처리 중이에요. 잠시만 기다려주세요."
+        )
         self._record("assistant", reply)
         return reply
 
@@ -403,10 +445,16 @@ class QuizConversationState:
             self._record("assistant", next_q)
             return next_q
         self.phase = Phase.READY
-        reply = (
-            f"{self.slots['subject']} 과목, '{self.slots['topic']}' 단원으로 "
-            f"{self.slots.get('grade', DEFAULT_GRADE)} 대상 퀴즈를 만들어볼게요. 잠시만 기다려주세요."
-        )
+        if self.locale == "us":
+            reply = (
+                f"I'll put together a Grade {self.slots.get('grade', DEFAULT_GRADE_US)} quiz on "
+                f"'{self.slots['topic']}' for {self.slots['subject']}. One moment please."
+            )
+        else:
+            reply = (
+                f"{self.slots['subject']} 과목, '{self.slots['topic']}' 단원으로 "
+                f"{self.slots.get('grade', DEFAULT_GRADE)} 대상 퀴즈를 만들어볼게요. 잠시만 기다려주세요."
+            )
         self._record("assistant", reply)
         return reply
 
