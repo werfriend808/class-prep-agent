@@ -17,15 +17,17 @@ from __future__ import annotations
 # 이 목록을 벗어난 필드(예: 평가_루브릭, 배경_읽기_자료)만 바뀐 경우는
 # 활동지를 다시 만들 필요가 없다.
 WORKSHEET_RELEVANT_FIELDS = ["topic", "subject", "grade", "토론_쟁점", "수업_흐름"]
+WORKSHEET_RELEVANT_FIELDS_US = ["topic", "subject", "grade", "discussion_issues", "lesson_flow"]
 
 # 메시지에 이 중 하나라도 들어있으면 "활동지 얘기"로 분류한다. 완벽한 NLU가
 # 아니라 단순 키워드 매칭이라 "토론 쟁점도 줄이고 활동지 질문도 줄여줘"처럼
 # 계획안과 활동지를 한 메시지에서 동시에 언급하는 경우는 활동지 쪽으로만
 # 분류되고 계획안 쪽 요청은 반영되지 않는 한계가 있다 (알려진 단순화).
 _WORKSHEET_KEYWORDS = ["활동지", "학생 활동", "워크시트", "활동 자료"]
+_WORKSHEET_KEYWORDS_US = ["worksheet", "student activity", "activity sheet"]  # 2026-09-18: US-locale equivalents (Phase: worksheet+quiz parity)
 
 
-def classify_edit_target(message: str, has_worksheet: bool) -> str:
+def classify_edit_target(message: str, has_worksheet: bool, locale: str = "ko") -> str:
     """채팅 수정 요청이 "plan"(수업계획안) 얘기인지 "worksheet"(학생 활동지) 얘기인지 분류한다.
 
     활동지가 아직 없으면(has_worksheet=False) 고칠 대상 자체가 없으니 항상
@@ -33,12 +35,15 @@ def classify_edit_target(message: str, has_worksheet: bool) -> str:
     메시지는 여기서 분류할 게 아니라, 호출하는 쪽(chat_app.py)이 "아직
     활동지가 없다"는 안내로 따로 처리한다.
     """
-    if has_worksheet and any(kw in message for kw in _WORKSHEET_KEYWORDS):
-        return "worksheet"
-    return "plan"
+    if not has_worksheet:
+        return "plan"
+    if locale == "us":
+        message_lower = message.lower()
+        return "worksheet" if any(kw in message_lower for kw in _WORKSHEET_KEYWORDS_US) else "plan"
+    return "worksheet" if any(kw in message for kw in _WORKSHEET_KEYWORDS) else "plan"
 
 
-def worksheet_needs_update(old_plan: dict, new_plan: dict) -> bool:
+def worksheet_needs_update(old_plan: dict, new_plan: dict, locale: str = "ko") -> bool:
     """수업계획안 수정 후, 이미 만들어진 학생 활동지도 다시 만들어야 하는지 판단한다.
 
     old_plan이 없으면(최초 생성이라 비교 대상이 없으면) 활동지가 아직 없을
@@ -47,4 +52,5 @@ def worksheet_needs_update(old_plan: dict, new_plan: dict) -> bool:
     """
     if not old_plan:
         return False
-    return any(old_plan.get(field) != new_plan.get(field) for field in WORKSHEET_RELEVANT_FIELDS)
+    fields = WORKSHEET_RELEVANT_FIELDS_US if locale == "us" else WORKSHEET_RELEVANT_FIELDS
+    return any(old_plan.get(field) != new_plan.get(field) for field in fields)
