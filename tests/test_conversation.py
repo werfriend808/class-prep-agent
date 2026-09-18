@@ -1,5 +1,12 @@
 """conversation.py (멀티턴 대화 상태 관리) 단위 테스트."""
-from src.conversation import ConversationState, Phase, extract_grade, extract_subject
+from src.conversation import (
+    ConversationState,
+    Phase,
+    extract_grade,
+    extract_grade_us,
+    extract_subject,
+    extract_subject_us,
+)
 
 
 def test_extract_subject_prefers_specific_over_generic():
@@ -107,3 +114,84 @@ def test_reset_clears_state():
     assert conv.slots == {}
     assert conv.draft is None
     assert conv.notion_url is None
+
+
+# 2026-09-17 (Phase 3): 영어/미국(Common Core Math) 버전 슬롯 추출 + ConversationState.
+# 한국어 경로(locale 기본값 "ko")는 위 테스트들 그대로 커버하므로 여기서는
+# locale="us"일 때의 동작만 확인한다.
+def test_extract_subject_us_recognizes_math():
+    assert extract_subject_us("I want to teach Math") == "Math"
+    assert extract_subject_us("let's do math") == "Math"  # 대소문자 무관
+    assert extract_subject_us("something unrelated") is None
+
+
+def test_extract_grade_us_detects_various_forms():
+    assert extract_grade_us("Kindergarten please") == "K"
+    assert extract_grade_us("K") == "K"
+    assert extract_grade_us("grade K") == "K"
+    assert extract_grade_us("Grade 3") == "3"
+    assert extract_grade_us("3rd grade students") == "3"
+    assert extract_grade_us("9th grade") == "9"
+    assert extract_grade_us("freshman year") == "9"
+    assert extract_grade_us("sophomore") == "10"
+    assert extract_grade_us("junior") == "11"
+    assert extract_grade_us("senior") == "12"
+    assert extract_grade_us("high school") == "9"
+    assert extract_grade_us("no grade mentioned") is None
+
+
+def test_conversation_state_us_locale_initial_question_is_english():
+    conv = ConversationState(locale="us")
+    assert "subject" in conv.next_question().lower()
+
+
+def test_conversation_state_us_locale_full_flow_to_ready():
+    conv = ConversationState(locale="us")
+    conv.handle_message("Math")
+    assert conv.slots["subject"] == "Math"
+
+    reply = conv.handle_message("Grade 3")
+    assert conv.slots["grade"] == "3"
+    assert "topic" in reply.lower()
+
+    conv.handle_message("Fractions and equivalent fractions")
+    assert conv.phase == Phase.READY
+    assert conv.slots["topic"] == "Fractions and equivalent fractions"
+
+
+def test_conversation_state_us_locale_unrecognized_subject_reprompts_in_english():
+    conv = ConversationState(locale="us")
+    reply = conv.handle_message("something totally unrelated")
+    assert conv.phase == Phase.COLLECTING
+    assert "subject" not in conv.slots
+    assert "Math" in reply
+
+
+def test_conversation_state_us_locale_unrecognized_grade_reprompts_in_english():
+    conv = ConversationState(locale="us")
+    conv.handle_message("Math")
+    reply = conv.handle_message("no idea")
+    assert conv.phase == Phase.COLLECTING
+    assert "grade" not in conv.slots
+    assert "grade" in reply.lower()
+
+
+def test_conversation_state_us_locale_drafted_message_becomes_revision_request():
+    conv = ConversationState(locale="us")
+    conv.handle_message("Math")
+    conv.handle_message("Grade 3")
+    conv.handle_message("Fractions")
+    conv.apply_draft({"overview": "..."})
+    assert conv.phase == Phase.DRAFTED
+
+    reply = conv.handle_message("make it shorter")
+    assert conv.phase == Phase.REVISING
+    assert conv.slots["revision_request"] == "make it shorter"
+    assert "revise" in reply.lower()
+
+
+def test_conversation_state_ko_locale_is_default_and_unaffected():
+    # locale을 안 주면 기존 한국어 동작 그대로다 — 명시적으로 한 번 더 확인.
+    conv = ConversationState()
+    assert conv.locale == "ko"
+    assert "과목" in conv.next_question()

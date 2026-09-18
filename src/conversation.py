@@ -13,12 +13,22 @@
     COLLECTING (과목 -> 학년 -> 주제 순으로 질문) -> READY (모두 수집됨, 생성 트리거 대기)
     -> DRAFTED (수업계획안 생성 완료, 사용자에게 보여줌)
     -> REVISING (사용자가 수정 요청) -> DRAFTED (재생성) ... 반복 가능
+
+2026-09-17 (Phase 3, 영어/미국 버전 첫 단계): ConversationState에 `locale`
+필드를 추가해 "us"일 때는 영어 슬롯 질문/응답(`extract_subject_us`,
+`extract_grade_us`, `SLOT_QUESTIONS_US`)을 쓰도록 분기했다. 기존 한국어
+경로(`locale` 기본값 "ko")는 이 파일의 다른 함수/상수를 하나도 안 바꿔서
+동작이 그대로다. QuizConversationState는 이번 범위 밖이라(오늘은 토의·토론
+흐름만 영어로 만들기로 함) 그대로 한국어 전용 extract_subject/extract_grade를
+쓴다.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+
+from .curriculum import get_provider
 
 
 class Phase(str, Enum):
@@ -57,6 +67,13 @@ SLOT_QUESTIONS = {
 }
 REQUIRED_SLOTS = ["subject", "grade", "topic"]
 
+SLOT_QUESTIONS_US = {
+    "subject": "What subject would you like to prepare a discussion lesson for? (Math is currently supported.)",
+    "grade": "What grade level is this for? (e.g. Kindergarten, Grade 3, 9th grade / freshman)",
+    "topic": "What topic or issue would you like to focus on? "
+    "(e.g. 'Should we prioritize environmental protection or economic development?')",
+}
+
 
 def extract_subject(text: str) -> str | None:
     for kw in _SUBJECT_KEYWORDS:
@@ -78,8 +95,70 @@ def extract_grade(text: str) -> str | None:
     return None
 
 
+# --- 영어/미국(Common Core Math) 버전 슬롯 추출 -----------------------------
+# 과목은 하드코딩하지 않고 현재 활성화된 CurriculumProvider(LOCALE=us면
+# CommonCoreMathProvider)의 subjects()를 그대로 쓴다 — Phase 2 README가 밝힌
+# 대로 나중에 Math 외 과목이 추가돼도 이 함수를 안 고쳐도 되게 하려는 것이다.
+def extract_subject_us(text: str) -> str | None:
+    # 명시적으로 "common_core_math"를 지정한다(그냥 get_provider()가 아니라) —
+    # LOCALE=us를 안 걸어놔도(예: 테스트, 또는 서버 기본값이 여전히 "ko"인 채로
+    # 이 함수만 호출되는 경우) 이 함수는 항상 미국 과목 목록을 기준으로 판단해야
+    # 하기 때문이다. config.CURRICULUM_PROVIDER의 LOCALE 연동은 편의 기본값일
+    # 뿐, "us" 코드 경로의 정확성이 거기 의존하면 안 된다.
+    text_lower = text.lower()
+    for subject in get_provider("common_core_math").subjects():
+        if subject.lower() in text_lower:
+            return subject
+    return None
+
+
+DEFAULT_GRADE_US = "8"  # 학년을 끝내 못 알아들었을 때만 쓰는 최후 폴백.
+
+# common_core_math_matcher.grade_groups_for()가 바로 알아듣는 표기("K", "1"~"12")
+# 로 정규화한다. 고등학교는 학년이 아니라 도메인 단위로 조직돼 있어("High
+# School" 하나로 묶임, common_core_standards/README.md 참고) 9~12학년 중
+# 어느 걸 골라도 매칭 결과가 같으므로, "high school"만 단독으로 말하면
+# 대표값 "9"를 쓴다.
+_GRADE_WORD_MAP_US: dict[str, str] = {
+    "kindergarten": "K", "kinder": "K", "k": "K",
+    "freshman": "9", "sophomore": "10", "junior": "11", "senior": "12",
+}
+_GRADE_PATTERN_US = re.compile(
+    r"\bgrade\s*(k|[0-9]{1,2})\b"
+    r"|\b([0-9]{1,2})\s*(?:st|nd|rd|th)\s*grade\b"
+    r"|\b(kindergarten|kinder|freshman|sophomore|junior|senior)\b"
+    r"|\bhigh school\b",
+    re.IGNORECASE,
+)
+
+
+def _clamp_grade_us(digit: str) -> str | None:
+    n = int(digit)
+    return str(n) if 0 <= n <= 12 else None
+
+
+def extract_grade_us(text: str) -> str | None:
+    stripped = text.strip()
+    if stripped.upper() in ("K", "KG"):
+        return "K"
+
+    m = _GRADE_PATTERN_US.search(text)
+    if not m:
+        return None
+    grade_or_k, digit_ordinal, word = m.groups()
+
+    if grade_or_k is not None:
+        return "K" if grade_or_k.lower() == "k" else _clamp_grade_us(grade_or_k)
+    if digit_ordinal is not None:
+        return _clamp_grade_us(digit_ordinal)
+    if word:
+        return _GRADE_WORD_MAP_US[word.lower()]
+    return "9"  # "high school" 단독 언급.
+
+
 @dataclass
 class ConversationState:
+    locale: str = "ko"  # "ko"(기본, NCIC) | "us"(Common Core Math, Phase 3)
     phase: Phase = Phase.COLLECTING
     slots: dict = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)  # [{"role": "user"/"assistant", "content": str}]
@@ -102,7 +181,8 @@ class ConversationState:
         missing = self.missing_slots()
         if not missing:
             return None
-        return SLOT_QUESTIONS[missing[0]]
+        questions = SLOT_QUESTIONS_US if self.locale == "us" else SLOT_QUESTIONS
+        return questions[missing[0]]
 
     def _record(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
@@ -115,8 +195,12 @@ class ConversationState:
         이 클래스의 책임이 아니다 — 그건 lesson_plan.py가 하고, 여기서는 상태
         전이(무엇을 물어야 하는지, 지금 뭘 해야 하는지)만 관리한다. UI(chat_app.py)
         가 READY/REVISING 상태를 보고 lesson_plan.generate_lesson_plan()을 호출한다.
+
+        2026-09-17: `self.locale`에 따라 슬롯 추출 함수/응답 문구만 영어·한국어로
+        갈라진다 — 상태 전이 로직 자체는 언어와 무관해서 하나만 둔다.
         """
         self._record("user", message)
+        is_us = self.locale == "us"
 
         if self.phase == Phase.COLLECTING:
             missing = self.missing_slots()
@@ -126,23 +210,37 @@ class ConversationState:
 
             current_slot = missing[0]
             if current_slot == "subject":
-                subject = extract_subject(message)
+                subject = extract_subject_us(message) if is_us else extract_subject(message)
                 if subject is None:
-                    reply = "죄송해요, 어떤 과목인지 못 알아들었어요. 국어/수학/영어/사회/과학/도덕/음악/미술/체육 등 중에서 골라주세요."
+                    reply = (
+                        f"Sorry, I couldn't recognize the subject. Currently supported: "
+                        f"{', '.join(get_provider('common_core_math').subjects())}."
+                        if is_us
+                        else "죄송해요, 어떤 과목인지 못 알아들었어요. 국어/수학/영어/사회/과학/도덕/음악/미술/체육 등 중에서 골라주세요."
+                    )
                     self._record("assistant", reply)
                     return reply
                 self.slots["subject"] = subject
             elif current_slot == "grade":
-                grade = extract_grade(message)
+                grade = extract_grade_us(message) if is_us else extract_grade(message)
                 if grade is None:
-                    reply = "죄송해요, 학년을 못 알아들었어요. 학교급을 포함해서 말씀해주세요 (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)."
+                    reply = (
+                        "Sorry, I couldn't understand the grade level. Please specify it clearly "
+                        "(e.g. Kindergarten, Grade 3, 9th grade)."
+                        if is_us
+                        else "죄송해요, 학년을 못 알아들었어요. 학교급을 포함해서 말씀해주세요 (예: 초등학교 3학년, 중학교 2학년, 고등학교 1학년)."
+                    )
                     self._record("assistant", reply)
                     return reply
                 self.slots["grade"] = grade
             elif current_slot == "topic":
                 topic = message.strip()
                 if not topic:
-                    reply = "주제를 조금 더 구체적으로 말씀해주시겠어요?"
+                    reply = (
+                        "Could you be a bit more specific about the topic?"
+                        if is_us
+                        else "주제를 조금 더 구체적으로 말씀해주시겠어요?"
+                    )
                     self._record("assistant", reply)
                     return reply
                 self.slots["topic"] = topic
@@ -156,11 +254,19 @@ class ConversationState:
             # 명시적인 버튼 액션으로 분리했다.)
             self.slots["revision_request"] = message.strip()
             self.phase = Phase.REVISING
-            reply = "알겠습니다. 말씀하신 내용을 반영해서 다시 만들어볼게요."
+            reply = (
+                "Got it — I'll revise it based on your feedback."
+                if is_us
+                else "알겠습니다. 말씀하신 내용을 반영해서 다시 만들어볼게요."
+            )
             self._record("assistant", reply)
             return reply
 
-        reply = "지금은 다른 처리 중이에요. 잠시만 기다려주세요."
+        reply = (
+            "I'm currently processing something else. Please wait a moment."
+            if is_us
+            else "지금은 다른 처리 중이에요. 잠시만 기다려주세요."
+        )
         self._record("assistant", reply)
         return reply
 
@@ -170,10 +276,16 @@ class ConversationState:
             self._record("assistant", next_q)
             return next_q
         self.phase = Phase.READY
-        reply = (
-            f"{self.slots['subject']} 과목, '{self.slots['topic']}' 주제로 "
-            f"{self.slots.get('grade', DEFAULT_GRADE)} 토의·토론 수업계획안을 만들어볼게요. 잠시만 기다려주세요."
-        )
+        if self.locale == "us":
+            reply = (
+                f"I'll put together a Grade {self.slots.get('grade', DEFAULT_GRADE_US)} discussion lesson "
+                f"plan on '{self.slots['topic']}' for {self.slots['subject']}. One moment please."
+            )
+        else:
+            reply = (
+                f"{self.slots['subject']} 과목, '{self.slots['topic']}' 주제로 "
+                f"{self.slots.get('grade', DEFAULT_GRADE)} 토의·토론 수업계획안을 만들어볼게요. 잠시만 기다려주세요."
+            )
         self._record("assistant", reply)
         return reply
 
