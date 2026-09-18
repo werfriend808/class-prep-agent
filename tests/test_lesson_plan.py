@@ -13,6 +13,7 @@ import src.lesson_plan as lesson_plan
 from src.curriculum import CurriculumProvider
 from src.lesson_plan import (
     PLAN_SECTIONS,
+    PLAN_SECTIONS_US,
     LessonPlanError,
     _build_prompt,
     _parse_plan_json,
@@ -226,3 +227,63 @@ def test_generate_lesson_plan_gives_up_after_second_failure():
 
     # 두 번까지만 시도하고 더 재시도하지 않아야 한다 (무한 재시도 방지).
     assert calls["count"] == 2
+
+
+# 2026-09-17 (Phase 3): locale="us" 경로 — 영어 프롬프트/섹션 키를 쓰고, 근거
+# 필드 이름이 "standards_references"로 바뀌고, provider가 명시적으로
+# CommonCoreMathProvider로 고정되는지 확인한다(ambient get_provider() 기본값에
+# 기대지 않는다 — lesson_plan.py의 해당 주석 참고).
+def test_generate_lesson_plan_us_locale_uses_english_sections_and_field_names():
+    fake_text = json.dumps({k: f"{k} content" for k in PLAN_SECTIONS_US})
+
+    original = lesson_plan.complete
+    lesson_plan.complete = lambda prompt, max_tokens=2000: fake_text
+    try:
+        plan = generate_lesson_plan(subject="Math", topic="Fractions", grade="3", locale="us")
+    finally:
+        lesson_plan.complete = original
+
+    for section in PLAN_SECTIONS_US:
+        assert section in plan
+    assert "ncic_references" not in plan
+    assert "standards_references" in plan
+    assert plan["locale"] == "us"
+    assert plan["subject"] == "Math"
+    assert plan["grade"] == "3"
+
+
+def test_generate_lesson_plan_us_locale_ignores_ambient_provider_default():
+    # 이 프로세스의 ambient CURRICULUM_PROVIDER는 테스트 환경에서 "ncic"다
+    # (LOCALE=us를 안 걸어놨으므로) — 그래도 locale="us"는 항상
+    # CommonCoreMathProvider로 매칭해야 한다.
+    fake_text = json.dumps({k: f"{k} content" for k in PLAN_SECTIONS_US})
+
+    original = lesson_plan.complete
+    lesson_plan.complete = lambda prompt, max_tokens=2000: fake_text
+    try:
+        plan = generate_lesson_plan(subject="Math", topic="fraction area", grade="3", locale="us")
+    finally:
+        lesson_plan.complete = original
+
+    # NCIC 인용이 아니라 Common Core 인용이 나와야 한다(코드 형식이 다르다 —
+    # NCIC는 "10통사1-01-01" 식, Common Core는 "3.NF.1" 식).
+    for ref in plan["standards_references"]:
+        assert "Common Core" in ref or ref.startswith("[3.")
+
+
+def test_generate_lesson_plan_us_locale_error_messages_are_english():
+    def _boom(prompt, max_tokens=2000):
+        raise RuntimeError("credit balance too low")
+
+    original = lesson_plan.complete
+    lesson_plan.complete = _boom
+    try:
+        try:
+            generate_lesson_plan(subject="Math", topic="fractions", grade="3", locale="us")
+        except LessonPlanError as e:
+            assert "Failed to generate the lesson plan" in str(e)
+            assert "credit balance too low" in str(e)
+        else:
+            raise AssertionError("LessonPlanError가 발생해야 함")
+    finally:
+        lesson_plan.complete = original

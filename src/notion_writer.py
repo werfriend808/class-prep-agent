@@ -37,7 +37,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import NOTION_LESSON_PLAN_PARENT_ID
-from .lesson_plan import PLAN_SECTIONS
+from .lesson_plan import PLAN_SECTIONS, PLAN_SECTIONS_US
 from .mcp_client import NotionMCPClient
 from .pipeline import _tool_result_to_obj
 
@@ -52,24 +52,51 @@ _SECTION_TITLES = {
     "평가_루브릭": "평가 루브릭",
 }
 
+# 2026-09-17 (Phase 3): 영어/미국 버전 plan dict("locale": "us")을 위한 영어 제목.
+_SECTION_TITLES_US = {
+    "overview": "Overview",
+    "objectives": "Objectives",
+    "background_reading": "Background Reading",
+    "key_concepts": "Key Concepts",
+    "discussion_issues": "Discussion Issues",
+    "lesson_flow": "Lesson Flow",
+    "sample_worksheet": "Sample Worksheet",
+    "assessment_rubric": "Assessment Rubric",
+}
+
 
 class NotionWriteError(RuntimeError):
     """페이지 생성/본문 작성 실패를 UI에 알리기 위한 예외."""
 
 
 def plan_to_markdown(plan: dict) -> str:
-    """lesson_plan.generate_lesson_plan()의 결과 dict를 Notion용 마크다운으로 변환."""
-    lines = [f"# {plan.get('topic', '')} 토의·토론 수업계획안", ""]
-    lines.append(f"**과목**: {plan.get('subject', '')}  |  **대상**: {plan.get('grade', '')}")
+    """lesson_plan.generate_lesson_plan()의 결과 dict를 Notion용 마크다운으로 변환.
+
+    2026-09-17 (Phase 3): plan["locale"]("us"면 영어 섹션 제목/근거 문구, 그 외엔
+    기존 한국어 그대로)로 분기한다 — generate_lesson_plan()이 이제 이 필드를
+    항상 채워 넣으므로("locale" 없는 예전 dict/테스트 픽스처는 .get() 기본값
+    "ko"로 떨어져 기존 동작 그대로 유지된다).
+    """
+    is_us = plan.get("locale", "ko") == "us"
+    sections = PLAN_SECTIONS_US if is_us else PLAN_SECTIONS
+    titles = _SECTION_TITLES_US if is_us else _SECTION_TITLES
+
+    if is_us:
+        lines = [f"# {plan.get('topic', '')} — Discussion Lesson Plan", ""]
+        lines.append(f"**Subject**: {plan.get('subject', '')}  |  **Grade**: {plan.get('grade', '')}")
+    else:
+        lines = [f"# {plan.get('topic', '')} 토의·토론 수업계획안", ""]
+        lines.append(f"**과목**: {plan.get('subject', '')}  |  **대상**: {plan.get('grade', '')}")
     lines.append("")
-    for key in PLAN_SECTIONS:
-        lines.append(f"## {_SECTION_TITLES.get(key, key)}")
+
+    for key in sections:
+        lines.append(f"## {titles.get(key, key)}")
         lines.append(str(plan.get(key, "")))
         lines.append("")
 
-    references = plan.get("ncic_references") or []
+    references = (plan.get("standards_references") if is_us else plan.get("ncic_references")) or []
     if references:
-        lines.append("## NCIC 교육과정 근거")
+        lines.append("## Common Core Standards" if is_us else "## NCIC 교육과정 근거")
         for ref in references:
             lines.append(f"- {ref}")
         lines.append("")

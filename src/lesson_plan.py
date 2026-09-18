@@ -25,6 +25,14 @@ LLM이 지어내지 않도록 우리 쪽 데이터(ncic_matcher)에서 직접 �
 바꿨다 — 영어/Common Core Math provider를 추가해도 이 함수는 안 바뀌게 하려는
 목적이고, 기본 provider가 그대로 NCIC라 동작은 바뀌지 않는다(`get_provider()`
 참고).
+
+2026-09-17 (Phase 3): `generate_lesson_plan()`에 `locale` 파라미터를 추가했다.
+기본값 "ko"는 이 파일의 기존 함수(`_build_prompt`/`PLAN_SECTIONS`)를 그대로
+쓰므로 동작이 안 바뀐다. "us"는 영어 프롬프트(`_build_prompt_us`)와 영어
+섹션 키(`PLAN_SECTIONS_US`)를 쓰고, 결과 dict의 근거 필드 이름도
+"ncic_references" 대신 "standards_references"를 쓴다(더 이상 NCIC 전용이
+아니라는 걸 필드 이름에서도 드러내려는 것 — 기존 "ko" 경로는 필드 이름을
+그대로 유지해서 하위 호환이 깨지지 않는다).
 """
 from __future__ import annotations
 
@@ -43,6 +51,19 @@ PLAN_SECTIONS = [
     "수업_흐름",
     "학생_활동지_예시",
     "평가_루브릭",
+]
+
+# 영어/미국 버전(Phase 3) 섹션 키 — 8개 구성은 그대로 직역해도 미국 수업
+# 설계 관행과 크게 다르지 않다고 판단해 구조 변경 없이 키 이름만 영어로 옮겼다.
+PLAN_SECTIONS_US = [
+    "overview",
+    "objectives",
+    "background_reading",
+    "key_concepts",
+    "discussion_issues",
+    "lesson_flow",
+    "sample_worksheet",
+    "assessment_rubric",
 ]
 
 
@@ -86,12 +107,45 @@ def _build_prompt(
     )
 
 
-def _generate_once(prompt: str) -> dict:
+def _build_prompt_us(
+    subject: str,
+    grade: str,
+    topic: str,
+    standards_records: list[dict],
+    revision_request: str | None,
+) -> str:
+    standards_context = (
+        "\n".join(f"- [{r['code']}] {r['text']}" for r in standards_records) or "(no matching standards found)"
+    )
+    sections_desc = ", ".join(PLAN_SECTIONS_US)
+    revision_note = (
+        f"\n\n[Revision request]\nPlease revise the previous draft to address this feedback: {revision_request}"
+        if revision_request
+        else ""
+    )
+    return (
+        f"You are a lesson-design assistant helping a {subject} teacher. "
+        f"Write a discussion-based lesson plan for Grade {grade} students following the guidelines below.\n\n"
+        f"Topic: {topic}\n\n"
+        f"Relevant Common Core State Standards:\n{standards_context}\n\n"
+        f"Respond with a JSON object containing exactly these {len(PLAN_SECTIONS_US)} keys "
+        f"(JSON only, no other text): {sections_desc}. Each value must be an English string; make "
+        f"'lesson_flow' and 'sample_worksheet' multi-line and concrete (use newlines)."
+        f"{revision_note}"
+    )
+
+
+def _generate_once(prompt: str, sections: list[str] = PLAN_SECTIONS, locale: str = "ko") -> dict:
     try:
         raw_text = complete(prompt, max_tokens=2000)
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
-        raise LessonPlanError(f"수업계획안 생성에 실패했어요 (LLM 호출 오류): {e}") from e
-    return _parse_plan_json(raw_text)
+        message = (
+            f"Failed to generate the lesson plan (LLM call error): {e}"
+            if locale == "us"
+            else f"수업계획안 생성에 실패했어요 (LLM 호출 오류): {e}"
+        )
+        raise LessonPlanError(message) from e
+    return _parse_plan_json(raw_text, sections, locale)
 
 
 def generate_lesson_plan(
@@ -100,32 +154,47 @@ def generate_lesson_plan(
     grade: str = "고1",
     revision_request: str | None = None,
     provider: CurriculumProvider | None = None,
+    locale: str = "ko",
 ) -> dict:
     """토의·토론 수업계획안을 생성한다.
 
-    반환값에는 8개 섹션 텍스트 + "ncic_references"(근거 문자열 리스트),
-    subject/grade/topic이 들어있다. 실패 시(크레딧 부족, JSON 파싱 실패 등)
-    LessonPlanError를 올린다 — chat_app.py에서 st.error로 잡아서 보여준다.
+    반환값에는 8개 섹션 텍스트 + 근거 문자열 리스트("ko"면 "ncic_references",
+    "us"면 "standards_references") + subject/grade/topic + "locale" 자기 자신이
+    들어있다("locale" 필드는 notion_writer.plan_to_markdown()처럼 이 dict만
+    보고도 어느 언어로 렌더링해야 하는지 알 수 있게 하려는 것). 실패 시(크레딧
+    부족, JSON 파싱 실패 등) LessonPlanError를 올린다 — chat_app.py에서
+    st.error로 잡아서 보여준다.
 
     LLM이 "JSON만 답하라"는 지시를 가끔 안 지켜서 파싱이 실패하는 간헐적
     현상이 있어(worksheet.py에서 실제로 겪고 고친 것과 같은 종류), 실패하면
     한 번만 자동으로 재시도한다. 재시도까지 실패하면 그대로 올린다.
     """
-    provider = provider or get_provider()
+    # locale="us"면 provider를 명시적으로 "common_core_math"로 고른다 — ambient
+    # get_provider()(=.env의 CURRICULUM_PROVIDER/LOCALE)에 기대면 LOCALE=us를
+    # 안 걸어놓은 환경(예: 테스트)에서 이 경로가 조용히 NCIC로 매칭을 시도하게
+    # 된다. locale="ko"(기본값)는 기존처럼 ambient 기본값을 그대로 쓴다.
+    provider = provider or get_provider("common_core_math" if locale == "us" else None)
     keywords = extract_keywords(topic)
-    ncic_records = provider.match_standards(subject, grade=grade, keywords=keywords, limit=5)
+    records = provider.match_standards(subject, grade=grade, keywords=keywords, limit=5)
 
-    prompt = _build_prompt(subject, grade, topic, ncic_records, revision_request)
+    if locale == "us":
+        prompt = _build_prompt_us(subject, grade, topic, records, revision_request)
+        sections = PLAN_SECTIONS_US
+    else:
+        prompt = _build_prompt(subject, grade, topic, records, revision_request)
+        sections = PLAN_SECTIONS
 
     try:
-        plan = _generate_once(prompt)
+        plan = _generate_once(prompt, sections, locale)
     except LessonPlanError:
-        plan = _generate_once(prompt)
+        plan = _generate_once(prompt, sections, locale)
 
-    plan["ncic_references"] = [provider.format_citation(r) for r in ncic_records]
+    reference_key = "standards_references" if locale == "us" else "ncic_references"
+    plan[reference_key] = [provider.format_citation(r) for r in records]
     plan["subject"] = subject
     plan["grade"] = grade
     plan["topic"] = topic
+    plan["locale"] = locale
     return plan
 
 
@@ -157,7 +226,7 @@ def _stringify_section(value: object) -> str:
     return str(value)
 
 
-def _parse_plan_json(raw_text: str) -> dict:
+def _parse_plan_json(raw_text: str, sections: list[str] = PLAN_SECTIONS, locale: str = "ko") -> dict:
     text = raw_text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
@@ -165,9 +234,19 @@ def _parse_plan_json(raw_text: str) -> dict:
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise LessonPlanError("LLM 응답을 계획안 형식으로 해석하지 못했어요. 다시 시도해주세요.") from e
+        message = (
+            "Couldn't parse the model's response as a lesson plan. Please try again."
+            if locale == "us"
+            else "LLM 응답을 계획안 형식으로 해석하지 못했어요. 다시 시도해주세요."
+        )
+        raise LessonPlanError(message) from e
 
-    missing = [s for s in PLAN_SECTIONS if s not in data]
+    missing = [s for s in sections if s not in data]
     if missing:
-        raise LessonPlanError(f"응답에 필요한 항목이 빠졌어요: {', '.join(missing)}")
-    return {k: _stringify_section(data[k]) for k in PLAN_SECTIONS}
+        message = (
+            f"The response is missing required fields: {', '.join(missing)}"
+            if locale == "us"
+            else f"응답에 필요한 항목이 빠졌어요: {', '.join(missing)}"
+        )
+        raise LessonPlanError(message)
+    return {k: _stringify_section(data[k]) for k in sections}

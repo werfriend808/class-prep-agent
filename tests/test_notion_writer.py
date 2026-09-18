@@ -49,6 +49,53 @@ def test_plan_to_markdown_omits_ncic_section_when_no_references():
     assert "NCIC" not in md
 
 
+# 2026-09-17 (Phase 3): plan["locale"] == "us"면 영어 섹션 제목/근거 문구로 렌더링된다.
+def _sample_plan_us() -> dict:
+    return {
+        "subject": "Math",
+        "grade": "3",
+        "topic": "Fractions",
+        "locale": "us",
+        "overview": "Overview text",
+        "objectives": "Objectives text",
+        "background_reading": "Background text",
+        "key_concepts": "Key concepts text",
+        "discussion_issues": "Discussion issues text",
+        "lesson_flow": "Lesson flow text",
+        "sample_worksheet": "Sample worksheet text",
+        "assessment_rubric": "Assessment rubric text",
+        "standards_references": ["[3.NF.1] some standard text (Source: Common Core ...)"],
+    }
+
+
+def test_plan_to_markdown_us_locale_uses_english_titles_and_references():
+    md = plan_to_markdown(_sample_plan_us())
+    assert "Fractions" in md
+    assert "## Overview" in md
+    assert "## Assessment Rubric" in md
+    assert "## Common Core Standards" in md
+    assert "[3.NF.1]" in md
+    # 한국어 섹션 제목/근거 문구가 섞여 들어가면 안 된다.
+    assert "자료 개요" not in md
+    assert "NCIC" not in md
+
+
+def test_plan_to_markdown_us_locale_omits_standards_section_when_no_references():
+    plan = _sample_plan_us()
+    plan["standards_references"] = []
+    md = plan_to_markdown(plan)
+    assert "Common Core Standards" not in md
+
+
+def test_plan_to_markdown_missing_locale_key_defaults_to_korean():
+    # generate_lesson_plan()이 없던 예전 dict(또는 다른 곳에서 만든 plan dict)도
+    # locale 필드가 없으면 그냥 기존 한국어 렌더링으로 떨어져야 한다.
+    plan = _sample_plan()
+    assert "locale" not in plan
+    md = plan_to_markdown(plan)
+    assert "## 자료 개요" in md
+
+
 def test_extract_page_id_from_dict():
     assert _extract_page_id({"id": "abc-123"}) == "abc-123"
 
