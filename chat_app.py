@@ -31,11 +31,13 @@ Activity 선택 화면(스펙 필수 UI 요소) 하나에서 두 Activity를 고
 흐름과 Notion/Docs/Forms 반영 자체는 크레딧과 무관하게 동작한다.
 
 2026-09-17 (Phase 3, 영어/미국 버전 첫 단계): `.env`의 `LOCALE=us`로 실행하면
-이 화면 전체가 영어 버전으로 바뀐다 — Activity 선택 자체를 건너뛰고 토의·토론
-계획안 생성 흐름만(영어 프롬프트 + Common Core Math 성취기준 근거 + Notion
-저장) 보여준다. 학생 활동지(Google Docs)와 Quiz Activity는 아직 한국어
-전용이라(worksheet.py/quiz.py 미번역) 이번 범위에서 뺐다 — 영어 화면에
-반쯤 번역된 한국어 기능이 섞여 나오는 것보다 아예 안 보여주는 쪽을 택했다.
+이 화면 전체가 영어 버전으로 바뀐다 — 토의·토론 계획안 생성 흐름(영어 프롬프트 +
+Common Core Math 성취기준 근거 + Notion 저장)을 영어로 보여준다.
+
+2026-09-18 (worksheet+Quiz 영어 번역 완료): worksheet.py/quiz.py를 영어로
+번역하면서 `LOCALE=us`에서도 한국어 버전과 동일하게 Activity 선택(Lesson
+Plan / Quiz)이 다시 나타나고, 학생 활동지(Google Docs)와 Quiz Activity가
+모두 영어로 동작한다 — 더 이상 반쯤 번역된 기능을 숨길 필요가 없다.
 """
 import asyncio
 
@@ -88,7 +90,10 @@ st.markdown(
 
 if LOCALE == "us":
     st.title("💬 AI Lesson Planning Agent")
-    activity = None  # Activity 선택 자체가 없다 — 아래 라우팅에서 영어 흐름 하나만 렌더링.
+    # 2026-09-18: worksheet.py/quiz.py 영어 번역 완료로 Quiz도 영어 화면에서 고를 수 있게 됐다 —
+    # 한국어 화면과 동일하게 라디오로 Activity를 선택한다(텍스트만 영어).
+    ACTIVITIES_US = ["Lesson Plan", "Quiz"]
+    activity = st.radio("Choose an activity", ACTIVITIES_US, horizontal=True, key="activity")
 else:
     st.title("💬 AI 수업 활동 에이전트")
     ACTIVITIES = ["토의·토론", "Quiz"]
@@ -125,6 +130,16 @@ PLAN_SECTION_TITLES_US = {
     "lesson_flow": "Lesson Flow",
     "sample_worksheet": "Sample Worksheet",
     "assessment_rubric": "Assessment Rubric",
+}
+
+# 2026-09-18: worksheet.py의 WORKSHEET_SECTIONS_US에 대응하는 영어 화면 제목.
+WORKSHEET_SECTION_TITLES_US = {
+    "activity_instructions": "Activity Instructions",
+    "background_summary": "Background Summary",
+    "discussion_questions": "Discussion Questions",
+    "personal_reflection": "Personal Reflection",
+    "group_notes": "Group Discussion Notes",
+    "wrap_up": "Wrap-up",
 }
 
 
@@ -358,9 +373,32 @@ def _render_discussion_activity() -> None:
 # 있으니 중복은 렌더링 부분(Streamlit 위젯 배치)에만 있다.
 
 
+def _sync_worksheet_if_needed_us(conv: ConversationState, old_plan: dict | None, plan: dict) -> None:
+    """_sync_worksheet_if_needed()의 영어 버전 (2026-09-18, worksheet.py 영어 번역 완료)."""
+    if not conv.worksheet_doc_id or not worksheet_needs_update(old_plan, plan, locale="us"):
+        return
+    try:
+        with st.spinner("Updating the student worksheet to match the revised lesson plan..."):
+            new_worksheet = generate_worksheet(plan, locale="us")
+            replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
+    except WorksheetError as e:
+        st.error(f"Failed to regenerate the student worksheet: {e}")
+    except GoogleDocsWriteError as e:
+        st.error(f"Failed to update Google Docs: {e}")
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Something went wrong while updating the worksheet: {e}")
+    else:
+        conv.worksheet = new_worksheet
+
+
 def _run_generation_us(conv: ConversationState, revision_request: str | None = None) -> bool:
-    """_run_generation()의 영어 버전. 학생 활동지 동기화는 없다(이번 범위 밖)."""
+    """_run_generation()의 영어 버전.
+
+    2026-09-18: worksheet.py 영어 번역 완료로 학생 활동지 자동 동기화도
+    이제 한국어 버전과 동일하게 동작한다(이전엔 이번 범위 밖이라 없었다).
+    """
     slots = conv.slots
+    old_plan = conv.draft
     try:
         with st.spinner("Generating the lesson plan..."):
             plan = generate_lesson_plan(
@@ -378,6 +416,40 @@ def _run_generation_us(conv: ConversationState, revision_request: str | None = N
 
     conv.apply_draft(plan)
     _sync_notion(conv, plan)
+    _sync_worksheet_if_needed_us(conv, old_plan, plan)
+    return True
+
+
+def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -> bool:
+    """_run_worksheet_revision()의 영어 버전 — 자세한 설명은 그쪽 docstring 참고."""
+    conv.phase = Phase.DRAFTED
+    conv.slots.pop("revision_request", None)
+
+    if not conv.worksheet_doc_id:
+        conv.history.append(
+            {
+                "role": "assistant",
+                "content": "You haven't made a student worksheet yet. Use the "
+                "'Also make a student worksheet' button below first.",
+            }
+        )
+        return True
+
+    try:
+        with st.spinner("Revising the student worksheet..."):
+            new_worksheet = generate_worksheet(conv.draft, revision_request=revision_request, locale="us")
+            replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
+    except WorksheetError as e:
+        conv.history.append({"role": "assistant", "content": str(e)})
+    except GoogleDocsWriteError as e:
+        conv.history.append({"role": "assistant", "content": f"Failed to update Google Docs: {e}"})
+    except Exception as e:  # noqa: BLE001
+        conv.history.append({"role": "assistant", "content": f"Something went wrong while revising the worksheet: {e}"})
+    else:
+        conv.worksheet = new_worksheet
+        conv.history.append(
+            {"role": "assistant", "content": f"Updated the student worksheet: [{conv.worksheet_url}]({conv.worksheet_url})"}
+        )
     return True
 
 
@@ -392,7 +464,8 @@ def _render_discussion_activity_us() -> None:
     st.caption(
         f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and topic, "
         "and I'll put together a discussion-based lesson plan grounded in Common Core standards and save it "
-        "to Notion. After it's generated, you can keep asking for revisions in the chat."
+        "to Notion. After it's generated, you can keep asking for revisions in the chat, and you can also "
+        "generate a student worksheet saved to Google Docs."
     )
 
     for msg in conv.history:
@@ -414,7 +487,11 @@ def _render_discussion_activity_us() -> None:
 
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        if _run_generation_us(conv, revision_request=revision_request):
+        target = classify_edit_target(revision_request, has_worksheet=bool(conv.worksheet_doc_id), locale="us")
+        if target == "worksheet":
+            if _run_worksheet_revision_us(conv, revision_request):
+                st.rerun()
+        elif _run_generation_us(conv, revision_request=revision_request):
             st.rerun()
 
     if conv.phase == Phase.DRAFTED and conv.draft:
@@ -437,6 +514,35 @@ def _render_discussion_activity_us() -> None:
             st.warning("Not yet saved to Notion — check the error message above.")
 
         st.divider()
+        if not conv.worksheet_doc_id:
+            st.caption("You can also generate a student worksheet for students to fill out during class, saved to Google Docs.")
+            if st.button("Also make a student worksheet", key="make_worksheet_us"):
+                try:
+                    with st.spinner("Generating the student worksheet..."):
+                        worksheet_data = generate_worksheet(plan, locale="us")
+                        doc = create_and_write_doc(
+                            f"{plan['topic']} Student Worksheet",
+                            worksheet_to_text(worksheet_data),
+                        )
+                except WorksheetError as e:
+                    st.error(str(e))
+                except GoogleDocsWriteError as e:
+                    st.error(str(e))
+                except Exception as e:  # noqa: BLE001
+                    st.error(f"Something went wrong while generating the worksheet: {e}")
+                else:
+                    conv.worksheet = worksheet_data
+                    conv.worksheet_doc_id = doc["doc_id"]
+                    conv.worksheet_url = doc["url"]
+                    st.rerun()
+        else:
+            st.success(f"Student worksheet: [{conv.worksheet_url}]({conv.worksheet_url})")
+            with st.expander("Preview student worksheet", expanded=False):
+                for key, label in WORKSHEET_SECTION_TITLES_US.items():
+                    st.write(f"**{label}**")
+                    st.write(conv.worksheet.get(key, "") if conv.worksheet else "")
+
+        st.divider()
         if st.button("Start over", key="reset_us"):
             conv.reset()
             conv.history.append({"role": "assistant", "content": conv.next_question()})
@@ -445,8 +551,8 @@ def _render_discussion_activity_us() -> None:
         st.caption(
             "Type any revision requests in the chat above (e.g. 'shorten the discussion issues to "
             "3 items', 'make the lesson flow fit a 30-minute class'). Revisions are saved back to the "
-            "same Notion page. (Student worksheet and Quiz features aren't available in this English "
-            "version yet.)"
+            "same Notion page, and if they affect the worksheet, the worksheet is regenerated too. "
+            "Mention 'worksheet' in your message to edit only the worksheet and leave the lesson plan as is."
         )
 
 
@@ -568,12 +674,132 @@ def _render_quiz_activity() -> None:
         )
 
 
+
+
+# ============================================================
+# Quiz Activity -- US locale (English, 2026-09-18)
+# ============================================================
+
+
+def _sync_form_us(quiz_conv: QuizConversationState, title: str, questions: list[dict]) -> None:
+    """_sync_form()\uc758 English \ubc84\uc804."""
+    try:
+        if quiz_conv.form_id:
+            with st.spinner("Updating the Google Forms quiz..."):
+                replace_quiz_questions(quiz_conv.form_id, questions)
+        else:
+            with st.spinner("Creating the Google Forms quiz..."):
+                result = create_quiz_form(title, questions)
+                quiz_conv.form_id = result["form_id"]
+                quiz_conv.edit_url = result["edit_url"]
+                quiz_conv.responder_url = result["responder_url"]
+    except FormsWriteError as e:
+        st.error(f"Failed to update Google Forms: {e}")
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Something went wrong while updating Google Forms: {e}")
+
+
+def _run_quiz_generation_us(quiz_conv: QuizConversationState, revision_request: str | None = None) -> bool:
+    """_run_quiz_generation()\uc758 English \ubc84\uc804."""
+    slots = quiz_conv.slots
+    old_draft = quiz_conv.draft
+    try:
+        with st.spinner("Generating the quiz..."):
+            result = generate_quiz(
+                subject=slots["subject"],
+                topic=slots["topic"],
+                grade=slots.get("grade", "8"),
+                revision_request=revision_request,
+                current_draft=old_draft,
+                locale="us",
+            )
+    except QuizError as e:
+        st.error(str(e))
+        if old_draft is not None:
+            quiz_conv.phase = Phase.DRAFTED
+        return False
+
+    quiz_conv.apply_draft(result)
+    _sync_form_us(quiz_conv, f"{result['topic']} Quiz", result["questions"])
+    return True
+
+
+def _render_quiz_activity_us() -> None:
+    if "quiz_conv_us" not in st.session_state:
+        st.session_state.quiz_conv_us = QuizConversationState(locale="us")
+        st.session_state.quiz_conv_us.history.append(
+            {"role": "assistant", "content": st.session_state.quiz_conv_us.next_question()}
+        )
+    quiz_conv: QuizConversationState = st.session_state.quiz_conv_us
+
+    st.caption(
+        f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and the "
+        "unit/topic you want to check, and I'll build a multiple-choice quiz (4 options by default, "
+        "adjustable via chat) and save it to Google Forms with auto-grading. You can keep asking for "
+        "revisions in the chat after it's generated."
+    )
+
+    for msg in quiz_conv.history:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+
+    user_input = st.chat_input("Type a message", key="quiz_chat_input_us")
+    if user_input:
+        with st.chat_message("user"):
+            st.write(user_input)
+        reply = quiz_conv.handle_message(user_input)
+        with st.chat_message("assistant"):
+            st.write(reply)
+        st.rerun()
+
+    if quiz_conv.phase == Phase.READY:
+        if _run_quiz_generation_us(quiz_conv):
+            st.rerun()
+
+    if quiz_conv.phase == Phase.REVISING:
+        if _run_quiz_generation_us(quiz_conv, revision_request=quiz_conv.slots.get("revision_request")):
+            st.rerun()
+
+    if quiz_conv.phase == Phase.DRAFTED and quiz_conv.draft:
+        questions = quiz_conv.draft["questions"]
+        st.divider()
+        st.subheader(f"{quiz_conv.draft.get('topic', '')} — {quiz_conv.draft.get('subject', '')} Quiz")
+
+        for i, q in enumerate(questions, start=1):
+            with st.expander(f"{i}. {q['question']}", expanded=(i == 1)):
+                for j, option in enumerate(q["options"]):
+                    marker = "✅" if j == q["correct_index"] else "▫️"
+                    st.write(f"{marker} {option}")
+                if q.get("explanation"):
+                    st.caption(f"Explanation: {q['explanation']}")
+
+        if quiz_conv.responder_url:
+            st.success(f"Saved to Google Forms (responder link): [{quiz_conv.responder_url}]({quiz_conv.responder_url})")
+            st.caption(f"Edit view: {quiz_conv.edit_url}")
+        else:
+            st.warning("Not yet saved to Google Forms — check the error message above.")
+
+        st.divider()
+        if st.button("Start over", key="quiz_reset_us"):
+            quiz_conv.reset()
+            quiz_conv.history.append({"role": "assistant", "content": quiz_conv.next_question()})
+            st.rerun()
+
+        st.caption(
+            "Type any revision requests in the chat above (e.g. 'make question 3 easier', "
+            "'add more options to question 2'). Revisions are saved back to the same Google Form."
+        )
+
+
 # ============================================================
 # Activity 라우팅
 # ============================================================
 
 if LOCALE == "us":
-    _render_discussion_activity_us()
+    if activity == "Quiz":
+        _render_quiz_activity_us()
+    else:
+        _render_discussion_activity_us()
 elif activity == "토의·토론":
     _render_discussion_activity()
 else:
