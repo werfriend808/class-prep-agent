@@ -21,7 +21,7 @@ Both activities support **two curriculum/language modes**, controlled by a singl
 | `ko` (default) | Korean | Korea's 2022 revised national curriculum (NCIC), 4,199 achievement standards across all grades/subjects | Original implementation |
 | `us` | English | Common Core State Standards for Mathematics (Math only, 517 standards) | Added later; same lesson-plan/worksheet/quiz pipeline, English prompts and UI |
 
-The `LOCALE=us` mode is newer than most of `README.md` and isn't documented there yet — this file is currently the only place it's written up. See `src/curriculum/` for the pluggable `CurriculumProvider` interface behind both modes, and `common_core_standards/README.md` for where the Common Core dataset came from and its licensing.
+`README.md` now covers the `LOCALE=us` mode too, in its own numbered section ("확장: 영어/미국(Common Core Math) 버전", §21-25) matching the rest of that document's style — look there for the full design rationale (the `CurriculumProvider` abstraction, why the Common Core dataset came from a community mirror instead of the official source, and so on). See `src/curriculum/` for the pluggable `CurriculumProvider` interface behind both modes, and `common_core_standards/README.md` for where the Common Core dataset came from and its licensing.
 
 ## Setup
 

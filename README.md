@@ -9,6 +9,8 @@
 
 전체 프로젝트 계획은 이 문서 맨 아래 "부록"에 정리되어 있습니다.
 
+`chat_app.py`는 `.env`의 `LOCALE=us`로 영어/미국(Common Core Math) 버전으로도 실행할 수 있습니다 — 자세한 내용은 아래 21~25번 "확장: 영어/미국(Common Core Math) 버전" 참고.
+
 ---
 
 # 실전 프로젝트 1: MCP 기반 Notion 페이지 검색 및 요약
@@ -579,6 +581,121 @@ tests/
 - **correct_answer가 옵션과 글자 단위로 정확히 일치하지 않으면 재시도로 이어집니다** (18-6-6 참고). LLM이 정답을 옮겨 적을 때 따옴표·대소문자·문장부호 차이로 옵션 원문과 완전히 같지 않게 쓰는 경우가 있어서 정규화 후 비교(따옴표/문장부호 제거, 소문자 변환)로 "정확히 하나만 일치"하면 구제하도록 완화했지만, 이 완화 자체가 보수적으로 짜여 있어 여전히 걸러지는 경우가 있을 수 있습니다 — 특히 영어 등 대소문자·문장부호 표기가 다양한 과목에서 재발 가능성이 남아 있습니다.
 - **LaTeX/마크다운 수식 표기가 섞이면 JSON 파싱 과정에서 조용히 손상될 수 있습니다** (18-6-7 참고). `\times`, `\frac{}{}`처럼 백슬래시로 시작하는 표기를 LLM이 그대로 쓰면, `\t`/`\f`가 JSON 표준 이스케이프와 우연히 겹쳐서 탭/폼피드 문자로 조용히 바뀌고 나머지 글자만 남는(예: "전체 imesrac{30}{100}=12") 방식으로 망가질 수 있습니다. 프롬프트로 LaTeX 표기 자체를 쓰지 말라고 지시하고, 손상되면 제어문자 검증으로 걸러 재시도를 유도하지만, 이 조합도 100% 예방을 보장하지는 않습니다.
 - **문항이 실제로는 존재하지 않는 그래프/표/그림을 참조할 수 있습니다** (18-6-8 참고). Quiz는 텍스트만 지원하고 이미지·차트를 만들어 붙이는 기능이 없는데, LLM이 "다음 그래프를 보고" 같은 문항을 낼 수 있습니다. 프롬프트로 막고 흔한 참조 표현을 정규식으로 걸러 재시도를 유도하지만, 정규식이 못 잡는 표현으로 시각 자료를 언급하면 그대로 통과할 수 있습니다 — 근본적으로 없애려면 차트 이미지를 생성해 Forms에 첨부하는 기능이 필요한데, 이번 프로젝트 범위 밖입니다.
+
+---
+
+# 확장: 영어/미국(Common Core Math) 버전 (`LOCALE=us`)
+
+2026-09-17~18에 진행한 확장으로, 지금까지의 실전 1·2·종합 프로젝트(전부 한국 NCIC + 한국어)를
+건드리지 않으면서 같은 코드베이스에 영어/미국 버전을 얹었습니다. 별도 앱이나 브랜치가 아니라
+`.env`의 `LOCALE` 환경변수 하나로 언어와 교육과정을 함께 전환하는 방식을 택했습니다.
+
+## 21. 무엇을 하는 서비스인가
+
+`.env`에 `LOCALE=us`를 설정하고 `chat_app.py`를 실행하면:
+
+1. 화면 전체(제목, Activity 선택, 채팅 문구, 버튼)가 영어로 바뀌고
+2. 토의·토론 계획안 생성의 근거가 한국 NCIC 대신 미국 Common Core State Standards for
+   Mathematics(수학 한정, 517건)로 바뀌며
+3. 토의·토론(계획안 생성+수정, 학생 활동지 생성)과 Quiz(문항 생성+수정, Google Forms 반영)
+   두 Activity 모두 한국어 버전과 동일한 기능을 영어로 제공합니다(2026-09-18, worksheet.py/
+   quiz.py 번역 완료 — 그 전날인 2026-09-17엔 토의·토론 계획안 생성까지만 지원했습니다).
+
+`LOCALE=ko`(또는 값을 비워둠)가 기본값이고, 이 경로는 실전 1·2·종합의 기존 함수를 그대로 쓰므로
+동작이 하나도 안 바뀝니다 — 이번 확장 전체가 새 `locale` 파라미터를 기본값으로만 추가하는 식으로
+이뤄졌습니다.
+
+## 22. 실행 방법
+
+사전 준비물은 종합 프로젝트(12번·17번)와 동일합니다 — Notion Integration, LLM 키, 학생 활동지까지
+쓰려면 Google Docs OAuth, Quiz까지 쓰려면 Google Forms API. 추가로 필요한 건 `.env`에 한 줄
+추가하는 것뿐입니다.
+
+```
+LOCALE=us
+```
+
+```bash
+python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없으면 python -m 필요
+```
+
+과목/학년/주제를 묻는 대화 흐름과 Notion/Google Docs/Google Forms 반영은 한국어 버전과 마찬가지로
+크레딧과 무관하게 확인할 수 있고, "Generating the lesson plan..." 같은 생성 단계만 LLM 호출이
+필요합니다.
+
+## 23. Agent 설계 의도
+
+### 23-1. `CurriculumProvider` 추상화 — 밴드형과 학년별형을 하나의 인터페이스로
+
+기존 `ncic_matcher.py`는 한국의 학년군(초/중/고 + 학년) 밴드 시스템을 로직에 직접 하드코딩하고
+있었는데, Common Core Math는 대부분 학년 1개당 라벨 1개(학년별형)라서 같은 함수로는 표현이 안
+됐습니다. `src/curriculum/base.py`의 `CurriculumProvider.grade_groups_for(grade)`가 "이 학년이
+데이터셋에서 어떤 라벨들로 나타날 수 있는지" 리스트를 반환하는 것으로 문제를 단순화했습니다 —
+밴드형(NCIC)은 여러 학년이 같은 라벨을 공유하고, 학년별형(Common Core Math)은 거의 1학년당 1라벨
+(고등학교와 8개 "Standards for Mathematical Practice"만 예외)이라는 차이를 이 반환값 하나로
+흡수합니다. 첫 구현체(`NCICProvider`)는 기존 `ncic_matcher.py`를 100% 그대로 감싸는 순수 리팩터링
+으로 검증했고(기존 테스트 전부 통과), 이후 두 번째 구현체(`CommonCoreMathProvider`)를 실제로
+추가해보고서야 이 인터페이스가 충분한지 확인했습니다.
+
+### 23-2. `LOCALE` 환경변수 하나로 언어+교육과정을 함께 전환 — 단, ambient 기본값에 의존하지 않음
+
+`config.py`의 `CURRICULUM_PROVIDER`는 명시적으로 안 정해두면 `LOCALE`에서 유도됩니다
+(`LOCALE=us`면 `common_core_math`, 아니면 `ncic`). 그런데 `lesson_plan.py`/`worksheet.py`/
+`quiz.py`/`conversation.py`의 US 코드 경로는 이 ambient 기본값에 기대지 않고 전부
+`get_provider("common_core_math")`를 명시적으로 호출합니다 — 처음엔 그냥 `get_provider()`를
+썼는데, 테스트 환경처럼 `.env`에 `LOCALE=us`가 안 걸려 있는 채로 `locale="us"` 코드 경로만 호출되면
+조용히 한국어 과목 목록(NCIC)이 섞여 나오는 버그가 실제로 테스트에서 발견됐습니다. "locale='us'로
+호출하면 항상 미국 교육과정을 쓴다"는 게 서버 설정과 무관하게 보장돼야 해서, 두 번 발견된 뒤로는
+US 경로 전체에서 명시적 호출로 통일했습니다.
+
+### 23-3. Common Core Math 데이터셋 확보 — 공식 소스 접근 불가로 커뮤니티 데이터셋 대체
+
+공식 corestandards.org는 XML 패키지만 제공하는데 이 프로젝트가 도는 네트워크의 egress 정책상
+`thecorestandards.org`에 직접 접근할 수 없어서, 공식 GUID·코드 체계를 그대로 보존한 커뮤니티
+데이터셋([SirFizX/standards-data](https://github.com/SirFizX/standards-data))을 원본으로 대신
+썼습니다. CCSS Public License가 요구하는 저작권 고지는 모든 레코드의 `source_doc` 필드에 박아
+넣어서 `format_citation()`을 거치면 자동으로 따라가게 했습니다. 데이터 출처/스키마/라이선스의
+자세한 내용은 `common_core_standards/README.md`를 참고하세요.
+
+### 23-4. worksheet/quiz 번역 — `lesson_plan.py`에서 확립한 locale 패턴을 그대로 재사용
+
+`lesson_plan.py`가 먼저 확립한 패턴(`locale: str = "ko"` 기본 파라미터, `_build_prompt_us()`
+같은 명시적 영어 함수, 에러 메시지까지 locale로 분기)을 `worksheet.py`/`quiz.py`/
+`conversation.py`의 `QuizConversationState`/`edit_propagation.py`에 그대로 적용했습니다. 유일하게
+새로 필요했던 건 `quiz.py`의 시각 자료 참조 감지 정규식입니다 — "다음 그래프를 보고" 같은 표현을
+걸러내는 정규식(`_VISUAL_REFERENCE_RE`)은 언어마다 표현이 달라서 영어 전용 버전
+(`_VISUAL_REFERENCE_RE_US`, "look at the following graph" 등)을 따로 만들어야 했습니다.
+
+## 24. 프로젝트 구조 (확장분)
+
+```
+src/curriculum/
+  base.py                        # CurriculumProvider 추상 인터페이스
+  ncic_provider.py                # 기존 ncic_matcher.py를 그대로 감싼 첫 구현체
+  common_core_math_provider.py    # 두 번째 구현체 (Common Core Math)
+  __init__.py                     # 레지스트리 + get_provider() 팩토리
+common_core_standards/
+  math_standards.json              # Common Core Math 성취기준 517건
+  README.md                        # 데이터 출처/스키마/라이선스
+scripts/
+  build_common_core_math_standards.py   # 위 데이터셋을 만드는 빌드 스크립트
+src/common_core_math_matcher.py   # ncic_matcher.py와 대응되는 매칭 유틸리티
+```
+
+`lesson_plan.py`/`worksheet.py`/`quiz.py`/`conversation.py`/`notion_writer.py`/`chat_app.py`는
+새 파일이 아니라 기존 파일에 `locale` 파라미터 분기를 추가한 것입니다 — 각 파일의 기존 프로젝트
+구조 항목(9번·14번·19번)을 참고하세요.
+
+## 25. 알려진 제한사항
+
+- **Common Core Math(수학)만 지원합니다.** 다른 과목은 구현돼 있지 않고, `CurriculumProvider`
+  인터페이스 자체는 다른 과목/교육과정을 추가해도 되게 설계했지만 실제 데이터셋 작업은 하지
+  않았습니다.
+- **원본이 아니라 커뮤니티 재구성 데이터셋을 씁니다** (23-3 참고). Common Core Math 자체가 2010년
+  이후 개정이 없어서 최신성 문제는 없지만, 공식 corestandards.org PDF와 한 글자씩 대조 검증하지는
+  않았습니다.
+- 짧은 영어 개요는 `README.en.md`에 따로 있습니다 — 이 섹션(21~25번)이 이 프로젝트 저장소의
+  기존 문서 스타일(번호가 매겨진 상세 설계 노트)을 따르는 상세 버전입니다.
 
 ---
 
