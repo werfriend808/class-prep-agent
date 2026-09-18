@@ -9,6 +9,7 @@ from src.quiz import (
     QUESTION_COUNT,
     QuizError,
     _build_prompt,
+    _build_prompt_us,
     _build_verification_prompt,
     _normalize_for_match,
     _parse_quiz_json,
@@ -575,3 +576,127 @@ def test_parse_quiz_json_allows_question_with_data_written_out_as_text():
     }
     parsed = _parse_quiz_json(json.dumps(data))
     assert "8권" in parsed["questions"][0]["question"]
+
+
+# 2026-09-18: locale="us" 경로 -- 영어 프롬프트/에러 메시지를 쓰고, 결과 dict에
+# "locale" 필드가 채워지는지, 영어 전용 시각 자료 참조 정규식(_VISUAL_REFERENCE_RE_US)이
+# 실제로 걸러내는지 확인한다. 기존 ko 기본 경로(locale 인자를 안 주는 모든 테스트)는
+# 이 파일에서 하나도 안 건드렸으니 그대로 회귀 검증이 된다.
+def _raw_question_us(**overrides) -> dict:
+    base = {
+        "question": "What is the sum of the interior angles of a triangle?",
+        "options": ["90 degrees", "180 degrees", "270 degrees", "360 degrees"],
+        "correct_index": 1,
+        "explanation": "The three interior angles of a triangle always add up to 180 degrees.",
+    }
+    base.update(overrides)
+    correct_index = base.pop("correct_index")
+    base["correct_answer"] = base["options"][correct_index]
+    return base
+
+
+def _fake_quiz_json_us(count: int = QUESTION_COUNT) -> str:
+    return json.dumps({"questions": [_raw_question_us(question=f"Question {i}") for i in range(count)]})
+
+
+def test_build_prompt_us_includes_topic_and_revision_note():
+    prompt = _build_prompt_us("Math", "8", "triangles", None)
+    assert "triangles" in prompt
+    assert "Revision request" not in prompt
+
+    prompt_with_revision = _build_prompt_us("Math", "8", "triangles", "make it easier")
+    assert "Revision request" in prompt_with_revision
+    assert "make it easier" in prompt_with_revision
+
+
+def test_generate_quiz_us_locale_success_sets_locale_and_english_fields():
+    fake_text = _fake_quiz_json_us()
+
+    original = quiz.complete
+    quiz.complete = lambda prompt, max_tokens=2000: fake_text
+    try:
+        result = generate_quiz(subject="Math", topic="triangle interior angles", grade="8", locale="us")
+    finally:
+        quiz.complete = original
+
+    assert len(result["questions"]) == QUESTION_COUNT
+    assert result["locale"] == "us"
+    assert result["subject"] == "Math"
+    assert result["topic"] == "triangle interior angles"
+
+
+def test_generate_quiz_us_locale_wraps_api_errors_in_english():
+    def _boom(prompt, max_tokens=2000):
+        raise RuntimeError("credit balance too low")
+
+    original = quiz.complete
+    quiz.complete = _boom
+    try:
+        try:
+            generate_quiz(subject="Math", topic="triangles", grade="8", locale="us")
+        except QuizError as e:
+            assert "Failed to generate the quiz" in str(e)
+            assert "credit balance too low" in str(e)
+        else:
+            raise AssertionError("QuizError가 발생해야 함")
+    finally:
+        quiz.complete = original
+
+
+def test_parse_quiz_json_us_locale_raises_english_message_on_invalid_json():
+    try:
+        _parse_quiz_json("not JSON", locale="us")
+    except QuizError as e:
+        assert "Couldn't parse" in str(e)
+    else:
+        raise AssertionError("QuizError가 발생해야 함")
+
+
+def test_parse_quiz_json_us_locale_raises_when_question_references_missing_visual():
+    data = {
+        "questions": [
+            _raw_question_us(question="Look at the following graph. What is the highest value shown?")
+        ]
+    }
+    try:
+        _parse_quiz_json(json.dumps(data), locale="us")
+    except QuizError as e:
+        assert "graph/table/image" in str(e)
+    else:
+        raise AssertionError("QuizError가 발생해야 함")
+
+
+def test_parse_quiz_json_us_locale_allows_question_with_data_written_out_as_text():
+    data = {
+        "questions": [
+            _raw_question_us(
+                question="A class read the following number of books each day: Mon 8, Tue 12. "
+                "How many more books were read on Tuesday?"
+            )
+        ]
+    }
+    parsed = _parse_quiz_json(json.dumps(data), locale="us")
+    assert len(parsed["questions"]) == 1
+
+
+def test_parse_quiz_json_us_locale_raises_english_message_when_correct_answer_missing():
+    data = {"questions": [{"question": "q?", "options": ["a", "b"]}]}
+    try:
+        _parse_quiz_json(json.dumps(data), locale="us")
+    except QuizError as e:
+        assert "missing a correct_answer" in str(e)
+    else:
+        raise AssertionError("QuizError가 발생해야 함")
+
+
+def test_generate_quiz_ko_locale_is_default_and_unaffected():
+    # locale을 안 주면 기존 한국어 동작 그대로다 -- 명시적으로 한 번 더 확인.
+    fake_text = _fake_quiz_json()
+    original = quiz.complete
+    quiz.complete = lambda prompt, max_tokens=2000: fake_text
+    try:
+        result = generate_quiz(subject="수학", topic="삼각형의 내각", grade="중2")
+    finally:
+        quiz.complete = original
+    assert result["locale"] == "ko"
+    assert len(result["questions"]) == QUESTION_COUNT

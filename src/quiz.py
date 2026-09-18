@@ -181,6 +181,19 @@ _VISUAL_REFERENCE_RE = re.compile(
 )
 
 
+# 2026-09-18: English (US-locale) equivalent of _VISUAL_REFERENCE_RE above -- catches
+# the common English phrasings that assume an image/graph/table exists outside the
+# question text (the quiz only ever shows plain text, same constraint as the Korean path).
+_VISUAL_REFERENCE_RE_US = re.compile(
+    r"\b(look at|see|refer to|according to|based on)\s+the\s+(following|above|below)\s+"
+    r"(graph|chart|table|diagram|picture|image|figure|map)\b"
+    r"|\b(graph|chart|table|diagram|figure|picture|image)\s+(shown\s+)?(above|below)\b"
+    r"|\bthe\s+following\s+(graph|chart|table|diagram|figure)\s+shows\b"
+    r"|\bas\s+shown\s+(in|on)\s+the\s+(graph|chart|table|diagram|figure)\b",
+    re.IGNORECASE,
+)
+
+
 def _try_eval_simple_expr(text: str) -> float | None:
     """"3x4" 같은 단순 두 항 산술식 문자열을 계산한다. 매칭되지 않거나 0으로
     나누면 None을 반환한다(동점 검증에서 이 문항은 건너뛴다는 뜻)."""
@@ -275,6 +288,82 @@ def _build_prompt(
     )
 
 
+def _build_prompt_us(
+    subject: str,
+    grade: str,
+    topic: str,
+    revision_request: str | None,
+    current_questions: list[dict] | None = None,
+) -> str:
+    """English (US-locale) version of _build_prompt() -- same structure and same six
+    numbered rules, translated. See _build_prompt()'s inline comments for why each rule
+    exists (LaTeX corruption, visual-reference hallucination, etc.)."""
+    if revision_request and current_questions:
+        current_text = "\n".join(
+            f"{i + 1}. {q['question']}\n"
+            + "\n".join(
+                f"   {chr(97 + j)}) {opt}" + (" [correct]" if j == q.get("correct_index") else "")
+                for j, opt in enumerate(q.get("options", []))
+            )
+            for i, q in enumerate(current_questions)
+        )
+        revision_note = (
+            f"\n\n[Current questions]\n{current_text}\n\n"
+            f"[Revision request]\nPlease rewrite the questions based on the current ones above, "
+            f"addressing this feedback (keep any question or option the request doesn't mention as close "
+            f"to the original as possible): {revision_request}"
+        )
+    elif revision_request:
+        revision_note = (
+            f"\n\n[Revision request]\nPlease revise the previous questions to address this feedback: "
+            f"{revision_request}"
+        )
+    else:
+        revision_note = ""
+    return (
+        f"You are an assessment-design assistant helping a Grade {grade} {subject} teacher. "
+        f"Create a multiple-choice quiz that checks understanding of the unit/topic below.\n\n"
+        f"Unit/topic: {topic}\n\n"
+        f"Respond with a JSON object containing exactly {QUESTION_COUNT} questions "
+        f"(JSON only, no other text): "
+        '{"questions": [{"question": "question text", '
+        '"options": ["option1", "option2", "option3", "option4"], '
+        '"correct_answer": "the exact text of the correct option (must exactly match one of the options, '
+        'not an index)", '
+        '"explanation": "explanation of the correct answer"}, ...]}. '
+        f"Use {DEFAULT_OPTION_COUNT} options by default unless asked to add or remove some, in which case "
+        f"use anywhere from {MIN_OPTIONS} to {MAX_OPTIONS}. Each question's options must be clearly distinct "
+        f"from each other, and exactly one must be correct. correct_answer must be copied verbatim from the "
+        f"options list (don't count positions -- write out the actual text of the correct option). "
+        f"Also follow these rules: "
+        f"(1) Each question must end as a complete, self-contained question or instruction (e.g. "
+        f"'What is ...?', 'Choose the ...', 'Is ... true? Answer yes or no.'). Don't end a question with a "
+        f"descriptive/meta sentence like 'This is about ...' or 'This is a question about ...'. "
+        f"(2) If a question needs a calculation or expression, include the actual expression in the "
+        f"question text itself (e.g. '246 + 173 = ?'). Don't just say there's an expression without "
+        f"including it. "
+        f"(3) If a question asks for the exception ('which of these is NOT ...?'), phrase the whole "
+        f"question consistently in the negative -- don't mix positive and negative phrasing in one "
+        f"question. "
+        f"(4) Before settling on a correct_answer, actually calculate or verify the facts so there is "
+        f"exactly one correct answer that doesn't overlap in value or meaning with the other options "
+        f"(especially check that reordered numbers in an expression don't actually produce the same "
+        f"value). "
+        f"(5) Write any math using plain text, not LaTeX or markdown notation (e.g. avoid \\times, "
+        f"\\frac{{}}{{}}, \\sqrt{{}}, \\div, \\cdot, $...$) -- the output is displayed as unformatted "
+        f"plain text. Use '×' or 'x' for multiplication, '÷' or '/' for division, and plain slashes "
+        f"for fractions like '30/100'. "
+        f"(6) This quiz shows text only -- no images, graphs, tables, or charts are attached separately. "
+        f"Never write a question that assumes a visual aid exists outside the question text (e.g. 'Look at "
+        f"the following graph', 'Refer to the table above', 'The graph below shows ...'). If a question "
+        f"needs data that would normally be shown in a table or graph, write that data directly into the "
+        f"question text as numbers/words (e.g. 'A class read the following number of books each day: "
+        f"Mon 8, Tue 12, Wed 10, Thu 6, Fri 4.') so the question is solvable from text alone."
+        f"{revision_note}"
+    )
+
+
+
 def _build_verification_prompt(subject: str, grade: str, topic: str, questions: list[dict]) -> str:
     """생성된 문항을 그대로 되짚어 보여주고 LLM에게 검수를 시키는 프롬프트를 만든다.
 
@@ -316,6 +405,40 @@ def _build_verification_prompt(subject: str, grade: str, topic: str, questions: 
     )
 
 
+def _build_verification_prompt_us(subject: str, grade: str, topic: str, questions: list[dict]) -> str:
+    """English (US-locale) version of _build_verification_prompt(). See that function's
+    docstring for why this second LLM-review pass exists."""
+    numbered = "\n\n".join(
+        f"{i + 1}. {q['question']}\n"
+        + "\n".join(
+            f"   {chr(97 + j)}) {opt}" + (" [marked correct]" if j == q["correct_index"] else "")
+            for j, opt in enumerate(q["options"])
+        )
+        + f"\n   Explanation: {q.get('explanation', '')}"
+        for i, q in enumerate(questions)
+    )
+    return (
+        f"You are a Grade {grade} {subject} teacher reviewing a multiple-choice quiz on '{topic}'. In each "
+        f"question below, the option marked [marked correct] is what will be scored as correct. Actually "
+        f"work through the calculation or concept/grammar for each question and review it against these "
+        f"criteria:\n"
+        f"(1) Is the option marked [marked correct] actually correct?\n"
+        f"(2) Is there exactly one correct answer (could another option also be considered correct)?\n"
+        f"(3) Is the underlying concept/classification/grammar claim in the question itself accurate (e.g. "
+        f"if the question classifies the options into a grammatical category or concept, is that "
+        f"classification actually correct)?\n"
+        f"(4) Is the question text itself complete and unambiguous (is any needed expression or information "
+        f"missing)?\n\n"
+        f"[Questions]\n{numbered}\n\n"
+        f"Respond with a JSON object in exactly this format (JSON only, no other text): "
+        '{"results": [{"valid": true or false, "reason": "one sentence on which criterion above was '
+        'violated and why, only when valid is false"}, ...]}. '
+        f"The results array must have exactly {len(questions)} entries, in the same order as the questions "
+        f"above."
+    )
+
+
+
 def _parse_verification_json(raw_text: str, expected_count: int) -> list[dict] | None:
     """검수 응답을 파싱한다. 형식이 이상하면(다른 검증들과 달리) 예외를 올리지
     않고 None을 반환한다 — 검수는 있으면 좋은 안전장치일 뿐 필수 관문이 아니라서,
@@ -334,14 +457,18 @@ def _parse_verification_json(raw_text: str, expected_count: int) -> list[dict] |
     return results
 
 
-def _verify_questions(subject: str, grade: str, topic: str, questions: list[dict]) -> None:
+def _verify_questions(subject: str, grade: str, topic: str, questions: list[dict], locale: str = "ko") -> None:
     """문항들을 LLM에게 다시 검수시킨다. 하나라도 invalid 판정을 받으면 QuizError를
     올려서 _generate_once()를 호출하는 쪽의 기존 1회 재시도 정책이 검수 실패에도
     똑같이 작동하게 한다(형식 오류든 검수 실패든 "다시 한 번 만들어본다"는 대응은
     동일하다는 판단). 검수 호출 자체가 실패하거나(네트워크/크레딧 등) 검수 응답
     형식이 깨지면 조용히 건너뛴다 — 검수 인프라 문제 때문에 정상적으로 만들어진
     퀴즈까지 버리지 않기 위함이다."""
-    prompt = _build_verification_prompt(subject, grade, topic, questions)
+    prompt = (
+        _build_verification_prompt_us(subject, grade, topic, questions)
+        if locale == "us"
+        else _build_verification_prompt(subject, grade, topic, questions)
+    )
     try:
         raw_text = complete(prompt, max_tokens=1500)
     except Exception:  # noqa: BLE001 — 검수 호출 실패는 원 결과를 그대로 쓰고 넘어간다
@@ -352,16 +479,26 @@ def _verify_questions(subject: str, grade: str, topic: str, questions: list[dict
     invalid = [v for v in verdicts if not v.get("valid", True)]
     if invalid:
         reasons = " / ".join(str(v.get("reason", "")).strip() for v in invalid if v.get("reason"))
+        if locale == "us":
+            raise QuizError(
+                f"Question review found a problem: "
+                f"{reasons or 'One or more questions have an incorrect answer or premise.'}"
+            )
         raise QuizError(f"문항 검수에서 문제가 발견됐어요: {reasons or '정답/전제가 정확하지 않은 문항이 있어요.'}")
 
 
-def _generate_once(subject: str, grade: str, topic: str, prompt: str) -> dict:
+def _generate_once(subject: str, grade: str, topic: str, prompt: str, locale: str = "ko") -> dict:
     try:
         raw_text = complete(prompt, max_tokens=2000)
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
-        raise QuizError(f"퀴즈 생성에 실패했어요 (LLM 호출 오류): {e}") from e
-    result = _parse_quiz_json(raw_text)
-    _verify_questions(subject, grade, topic, result["questions"])
+        message = (
+            f"Failed to generate the quiz (LLM call error): {e}"
+            if locale == "us"
+            else f"퀴즈 생성에 실패했어요 (LLM 호출 오류): {e}"
+        )
+        raise QuizError(message) from e
+    result = _parse_quiz_json(raw_text, locale)
+    _verify_questions(subject, grade, topic, result["questions"], locale)
     return result
 
 
@@ -371,6 +508,7 @@ def generate_quiz(
     grade: str = "고1",
     revision_request: str | None = None,
     current_draft: dict | None = None,
+    locale: str = "ko",
 ) -> dict:
     """단원/주제에 대한 객관식 퀴즈를 생성한다.
 
@@ -392,60 +530,96 @@ def generate_quiz(
     """
     current_questions = current_draft.get("questions") if current_draft else None
 
-    prompt = _build_prompt(subject, grade, topic, revision_request, current_questions)
+    prompt = (
+        _build_prompt_us(subject, grade, topic, revision_request, current_questions)
+        if locale == "us"
+        else _build_prompt(subject, grade, topic, revision_request, current_questions)
+    )
 
     try:
-        result = _generate_once(subject, grade, topic, prompt)
+        result = _generate_once(subject, grade, topic, prompt, locale)
     except QuizError:
-        result = _generate_once(subject, grade, topic, prompt)
+        result = _generate_once(subject, grade, topic, prompt, locale)
 
     result["subject"] = subject
     result["grade"] = grade
     result["topic"] = topic
+    result["locale"] = locale
     return result
 
 
-def _parse_quiz_json(raw_text: str) -> dict:
+def _parse_quiz_json(raw_text: str, locale: str = "ko") -> dict:
     text = raw_text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"```\s*$", "", text)
+    is_us = locale == "us"
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise QuizError("LLM 응답을 퀴즈 형식으로 해석하지 못했어요. 다시 시도해주세요.") from e
+        message = (
+            "Couldn't parse the model's response as a quiz. Please try again."
+            if is_us
+            else "LLM 응답을 퀴즈 형식으로 해석하지 못했어요. 다시 시도해주세요."
+        )
+        raise QuizError(message) from e
 
     questions = data.get("questions") if isinstance(data, dict) else None
     if not isinstance(questions, list) or not questions:
-        raise QuizError("LLM 응답에 문항(questions) 목록이 없어요. 다시 시도해주세요.")
+        message = (
+            "The response has no 'questions' list. Please try again."
+            if is_us
+            else "LLM 응답에 문항(questions) 목록이 없어요. 다시 시도해주세요."
+        )
+        raise QuizError(message)
 
+    visual_reference_re = _VISUAL_REFERENCE_RE_US if is_us else _VISUAL_REFERENCE_RE
     validated: list[dict] = []
     for i, q in enumerate(questions):
         if not isinstance(q, dict):
-            raise QuizError(f"{i + 1}번 문항 형식이 올바르지 않아요.")
+            message = f"Question {i + 1} has an invalid format." if is_us else f"{i + 1}번 문항 형식이 올바르지 않아요."
+            raise QuizError(message)
         options = q.get("options")
         if not isinstance(options, list) or not (MIN_OPTIONS <= len(options) <= MAX_OPTIONS):
-            raise QuizError(
-                f"{i + 1}번 문항의 선택지 개수가 올바르지 않아요 "
+            message = (
+                f"Question {i + 1} has an invalid number of options "
+                f"(must be between {MIN_OPTIONS} and {MAX_OPTIONS})."
+                if is_us
+                else f"{i + 1}번 문항의 선택지 개수가 올바르지 않아요 "
                 f"({MIN_OPTIONS}개 이상 {MAX_OPTIONS}개 이하여야 해요)."
             )
+            raise QuizError(message)
         stripped_options = [str(o).strip() for o in options]
         if len(set(stripped_options)) != len(stripped_options):
             # 과목/문항 유형과 무관하게 보기 텍스트가 완전히 겹치면 무조건 잘못된
             # 문항이다 — 재시도를 유도한다.
-            raise QuizError(f"{i + 1}번 문항의 보기 중 내용이 겹치는 것이 있어요. 다시 시도해주세요.")
+            message = (
+                f"Question {i + 1} has duplicate option text. Please try again."
+                if is_us
+                else f"{i + 1}번 문항의 보기 중 내용이 겹치는 것이 있어요. 다시 시도해주세요."
+            )
+            raise QuizError(message)
         evaluated = [_try_eval_simple_expr(opt) for opt in stripped_options]
         if all(v is not None for v in evaluated) and len(set(evaluated)) != len(evaluated):
             # 보기 전부가 "숫자 연산자 숫자" 형태의 단순 산술식일 때만 도달한다(수학 외
             # 과목/결과값을 고르는 문항에는 이 패턴 자체가 안 나온다). 순서만 바꾼
             # 식(예: "15+27"과 "30+12")이 실제로는 같은 값이라 정답이 여러 개가 되는
             # 문제가 실사용 중 반복적으로 발견됐다(quiz.py 모듈 docstring 참고).
-            raise QuizError(
-                f"{i + 1}번 문항의 보기 중 계산 결과가 같은 것이 있어요(예: 순서만 바꾼 식). 다시 시도해주세요."
+            message = (
+                f"Question {i + 1} has options that evaluate to the same result "
+                "(e.g. the same expression reordered). Please try again."
+                if is_us
+                else f"{i + 1}번 문항의 보기 중 계산 결과가 같은 것이 있어요(예: 순서만 바꾼 식). 다시 시도해주세요."
             )
+            raise QuizError(message)
         correct_answer = q.get("correct_answer")
         if not isinstance(correct_answer, str) or not correct_answer.strip():
-            raise QuizError(f"{i + 1}번 문항에 정답(correct_answer)이 없어요.")
+            message = (
+                f"Question {i + 1} is missing a correct_answer."
+                if is_us
+                else f"{i + 1}번 문항에 정답(correct_answer)이 없어요."
+            )
+            raise QuizError(message)
         correct_answer_stripped = correct_answer.strip()
         if correct_answer_stripped in stripped_options:
             correct_index = stripped_options.index(correct_answer_stripped)
@@ -466,10 +640,20 @@ def _parse_quiz_json(raw_text: str) -> dict:
                 # LLM이 정답 텍스트를 보기 중 하나와 다르게(완전히 다른 재서술 등) 적은
                 # 경우 — 인덱스를 역산할 방법이 없으므로 재시도를 유도한다(quiz.py의
                 # 기존 1회 재시도 정책, generate_quiz 참고).
-                raise QuizError(f"{i + 1}번 문항의 정답(correct_answer)이 보기 중에 없어요.")
+                message = (
+                    f"Question {i + 1}'s correct_answer doesn't match any option."
+                    if is_us
+                    else f"{i + 1}번 문항의 정답(correct_answer)이 보기 중에 없어요."
+                )
+                raise QuizError(message)
         question_text = str(q.get("question", "")).strip()
         if not question_text:
-            raise QuizError(f"{i + 1}번 문항에 문제 텍스트가 없어요.")
+            message = (
+                f"Question {i + 1} is missing its question text."
+                if is_us
+                else f"{i + 1}번 문항에 문제 텍스트가 없어요."
+            )
+            raise QuizError(message)
         explanation_text = str(q.get("explanation", "")).strip()
         if any(
             _UNEXPECTED_CONTROL_CHAR_RE.search(t)
@@ -479,18 +663,26 @@ def _parse_quiz_json(raw_text: str) -> dict:
             # (_UNEXPECTED_CONTROL_CHAR_RE 정의부 주석, README 18-6-7 참고) — 재시도를
             # 유도한다. 이스케이프 자체는 이미 사라진 뒤라 원래 표기를 복원할 방법이
             # 없으므로 여기서 고쳐 쓰지 않고 다시 생성하게 한다.
-            raise QuizError(
-                f"{i + 1}번 문항에 깨진 특수문자(표시되지 않는 제어문자)가 섞여 있어요. "
+            message = (
+                f"Question {i + 1} contains corrupted characters (unexpected control characters). "
+                "Please try again."
+                if is_us
+                else f"{i + 1}번 문항에 깨진 특수문자(표시되지 않는 제어문자)가 섞여 있어요. "
                 "다시 시도해주세요."
             )
-        if _VISUAL_REFERENCE_RE.search(question_text) or _VISUAL_REFERENCE_RE.search(explanation_text):
+            raise QuizError(message)
+        if visual_reference_re.search(question_text) or visual_reference_re.search(explanation_text):
             # Quiz는 텍스트만 Forms에 반영하고 그래프/표/그림을 별도로 만들어 붙이지
             # 않는다(_VISUAL_REFERENCE_RE 정의부 주석, README 18-6-8 참고) — 이런 표현이
             # 있으면 문항 밖에 학생이 볼 수 없는 자료가 있다는 뜻이라 재시도를 유도한다.
-            raise QuizError(
-                f"{i + 1}번 문항이 이 퀴즈에 없는 그래프/표/그림을 참조하고 있어요. "
+            message = (
+                f"Question {i + 1} refers to a graph/table/image that isn't part of this quiz. "
+                "Please try again."
+                if is_us
+                else f"{i + 1}번 문항이 이 퀴즈에 없는 그래프/표/그림을 참조하고 있어요. "
                 "다시 시도해주세요."
             )
+            raise QuizError(message)
         validated.append(
             {
                 "question": question_text,
