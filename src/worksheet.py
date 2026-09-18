@@ -35,6 +35,26 @@ _SECTION_TITLES = {
     "소감_정리": "소감 정리",
 }
 
+# 2026-09-18: US-locale (English) worksheet sections. Direct translation of the
+# 6-section structure -- same rationale as PLAN_SECTIONS_US in lesson_plan.py.
+WORKSHEET_SECTIONS_US = [
+    "activity_instructions",
+    "background_summary",
+    "discussion_questions",
+    "personal_reflection",
+    "group_notes",
+    "wrap_up",
+]
+
+_SECTION_TITLES_US = {
+    "activity_instructions": "Activity Instructions",
+    "background_summary": "Background Summary",
+    "discussion_questions": "Discussion Questions",
+    "personal_reflection": "Personal Reflection",
+    "group_notes": "Group Discussion Notes",
+    "wrap_up": "Wrap-up",
+}
+
 
 class WorksheetError(RuntimeError):
     """활동지 생성 실패를 UI에 알리기 위한 예외."""
@@ -63,15 +83,46 @@ def _build_prompt(plan: dict, revision_request: str | None) -> str:
     )
 
 
-def _generate_once(prompt: str) -> dict:
+
+def _build_prompt_us(plan: dict, revision_request: str | None) -> str:
+    """English (US-locale) version of _build_prompt(). `plan` here is what
+    lesson_plan.generate_lesson_plan(locale="us") returns, so it uses the English
+    section keys ("discussion_issues", "lesson_flow") instead of the Korean ones."""
+    sections_desc = ", ".join(WORKSHEET_SECTIONS_US)
+    revision_note = (
+        f"\n\n[Revision request]\nPlease revise the previous worksheet to address this feedback: {revision_request}"
+        if revision_request
+        else ""
+    )
+    return (
+        f"You are a lesson-design assistant helping a {plan.get('subject', '')} teacher. "
+        f"Based on the lesson plan below, create a student worksheet that {plan.get('grade', '')} "
+        f"students will fill out themselves during class. It should be written for students to read "
+        f"and fill in blanks, not teacher-facing notes.\n\n"
+        f"Topic: {plan.get('topic', '')}\n"
+        f"Discussion issues: {plan.get('discussion_issues', '')}\n"
+        f"Lesson flow: {plan.get('lesson_flow', '')}\n\n"
+        f"Respond with a JSON object containing exactly these {len(WORKSHEET_SECTIONS_US)} keys "
+        f"(JSON only, no other text): {sections_desc}. 'personal_reflection' and 'group_notes' should "
+        f"be written as questions and blanks for students to fill in themselves, and each value must be "
+        f"an English string (multi-line is fine)."
+        f"{revision_note}"
+    )
+
+def _generate_once(prompt: str, locale: str = "ko") -> dict:
     try:
         raw_text = complete(prompt, max_tokens=1500)
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
-        raise WorksheetError(f"학생 활동지 생성에 실패했어요 (LLM 호출 오류): {e}") from e
-    return _parse_worksheet_json(raw_text)
+        message = (
+            f"Failed to generate the student worksheet (LLM call error): {e}"
+            if locale == "us"
+            else f"학생 활동지 생성에 실패했어요 (LLM 호출 오류): {e}"
+        )
+        raise WorksheetError(message) from e
+    return _parse_worksheet_json(raw_text, locale)
 
 
-def generate_worksheet(plan: dict, revision_request: str | None = None) -> dict:
+def generate_worksheet(plan: dict, revision_request: str | None = None, locale: str = "ko") -> dict:
     """수업계획안(dict)을 바탕으로 학생 활동지를 생성한다.
 
     반환값에는 WORKSHEET_SECTIONS 6개 섹션 + topic/subject/grade가 들어있다.
@@ -85,33 +136,45 @@ def generate_worksheet(plan: dict, revision_request: str | None = None) -> dict:
     재시도까지 실패하면(계속되는 형식 오류, 크레딧 부족 등) 그때는
     WorksheetError를 그대로 올려서 사용자가 직접 다시 시도하게 한다.
     """
-    prompt = _build_prompt(plan, revision_request)
+    prompt = _build_prompt_us(plan, revision_request) if locale == "us" else _build_prompt(plan, revision_request)
 
     try:
-        worksheet = _generate_once(prompt)
+        worksheet = _generate_once(prompt, locale)
     except WorksheetError:
-        worksheet = _generate_once(prompt)
+        worksheet = _generate_once(prompt, locale)
 
     worksheet["topic"] = plan.get("topic", "")
     worksheet["subject"] = plan.get("subject", "")
     worksheet["grade"] = plan.get("grade", "")
+    worksheet["locale"] = locale
     return worksheet
 
 
-def _parse_worksheet_json(raw_text: str) -> dict:
+def _parse_worksheet_json(raw_text: str, locale: str = "ko") -> dict:
     text = raw_text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"```\s*$", "", text)
+    sections = WORKSHEET_SECTIONS_US if locale == "us" else WORKSHEET_SECTIONS
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
-        raise WorksheetError("LLM 응답을 활동지 형식으로 해석하지 못했어요. 다시 시도해주세요.") from e
+        message = (
+            "Couldn't parse the model's response as a worksheet. Please try again."
+            if locale == "us"
+            else "LLM 응답을 활동지 형식으로 해석하지 못했어요. 다시 시도해주세요."
+        )
+        raise WorksheetError(message) from e
 
-    missing = [s for s in WORKSHEET_SECTIONS if s not in data]
+    missing = [s for s in sections if s not in data]
     if missing:
-        raise WorksheetError(f"응답에 필요한 항목이 빠졌어요: {', '.join(missing)}")
-    return {k: _stringify_section(data[k]) for k in WORKSHEET_SECTIONS}
+        message = (
+            f"The response is missing required fields: {', '.join(missing)}"
+            if locale == "us"
+            else f"응답에 필요한 항목이 빠졌어요: {', '.join(missing)}"
+        )
+        raise WorksheetError(message)
+    return {k: _stringify_section(data[k]) for k in sections}
 
 
 def worksheet_to_text(worksheet: dict) -> str:
@@ -121,6 +184,16 @@ def worksheet_to_text(worksheet: dict) -> str:
     batchUpdate의 insertText는 마크다운을 렌더링하지 않는 순수 텍스트라
     "#"/"##" 같은 마크다운 문법 대신 줄바꿈으로만 구분한다.
     """
+    if worksheet.get("locale") == "us":
+        lines = [f"{worksheet.get('topic', '')} Student Worksheet", ""]
+        lines.append(f"Subject: {worksheet.get('subject', '')}  |  Grade: {worksheet.get('grade', '')}")
+        lines.append("")
+        for key in WORKSHEET_SECTIONS_US:
+            lines.append(_SECTION_TITLES_US.get(key, key))
+            lines.append(str(worksheet.get(key, "")))
+            lines.append("")
+        return "\n".join(lines)
+
     lines = [f"{worksheet.get('topic', '')} 학생 활동지", ""]
     lines.append(f"과목: {worksheet.get('subject', '')}  |  대상: {worksheet.get('grade', '')}")
     lines.append("")
