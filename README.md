@@ -1,5 +1,7 @@
 # class-prep-agent — 멋사 NLP5기 "AI 기반 교육활동 지원 서비스" (실전 1·2 + 종합 프로젝트)
 
+[**Read this in English**](README.en.md) (short overview; this file is the full Korean development log)
+
 멋사 NLP5기 "[AI 기반 교육활동 지원 서비스]" 프로젝트의 구현체입니다. 하나의 저장소에서 두 개의 Streamlit 앱으로 제공합니다.
 
 - **실전 프로젝트 1** (`app.py`): 자연어 질의로 Notion 팀스페이스의 수업 자료를 검색·요약
