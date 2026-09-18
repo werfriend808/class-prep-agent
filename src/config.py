@@ -39,9 +39,18 @@ GOOGLE_TOKEN_PATH = os.getenv("GOOGLE_TOKEN_PATH", "token.json")
 # 학생 활동지 Google Doc을 만들 때 넣어줄 Drive 폴더 ID (선택). 비어있으면 내 드라이브 최상위에 생성.
 GOOGLE_DOCS_FOLDER_ID = os.getenv("GOOGLE_DOCS_FOLDER_ID", "")
 
-# 교육과정 provider 선택 ("ncic"만 존재 — Phase 2에서 미국 Common Core Math 등
-# 추가 예정, src/curriculum/__init__.py의 get_provider() 참고).
-CURRICULUM_PROVIDER = os.getenv("CURRICULUM_PROVIDER", "ncic")
+# 앱 로케일 — "ko"(기본, 한국/NCIC) | "us"(영어/Common Core Math, Phase 3).
+# 이 값 하나로 교육과정 provider와 UI/프롬프트 언어가 함께 바뀐다
+# (chat_app.py가 이 값에 따라 화면 전체를 한국어/영어 버전으로 분기한다).
+LOCALE = os.getenv("LOCALE", "ko")
+
+# 교육과정 provider 선택. 명시적으로 지정하지 않으면 위 LOCALE에서 유도한다
+# ("ko" -> "ncic", "us" -> "common_core_math") — src/curriculum/__init__.py의
+# get_provider() 참고. LOCALE과 별개로 CURRICULUM_PROVIDER만 따로 지정하는
+# 것도 가능하다(예: 영어 UI 없이 provider만 바꿔서 테스트하고 싶을 때).
+CURRICULUM_PROVIDER = os.getenv("CURRICULUM_PROVIDER") or (
+    "common_core_math" if LOCALE == "us" else "ncic"
+)
 
 if not NOTION_API_KEY:
     raise RuntimeError(
