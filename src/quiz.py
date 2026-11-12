@@ -130,7 +130,15 @@ DEFAULT_OPTION_COUNT = 4
 # 문장이 섞인 보기(예: "칠 곱하기 팔은 오십육")나 결과값만 있는 보기(예: "419")는
 # 매칭되지 않으므로, 수학이 아닌 과목이나 결과값 자체를 고르는 문항에는 아래
 # 동점 검증이 아예 적용되지 않는다(오탐 방지를 위해 의도적으로 엄격하게 좁혔다).
-_SIMPLE_EXPR_RE = re.compile(r"^(\d+)\s*([+\-x×*÷/])\s*(\d+)$")
+#
+# 2026-11-12: "/"를 연산자에서 뺐다. 보기의 "a/b"는 거의 항상 나눗셈이 아니라 분수
+# 표기인데, 이걸 나눗셈으로 계산해 값이 같으면 거부하다 보니 분수 단원 퀴즈가
+# 배포 환경에서도 계속 실패했다. "1/2을 분모 6으로 바꾸면?"처럼 같은 값을 다른
+# 형태로 쓰는 게 문제의 핵심인 경우(정답 3/6, 오답 1/2)도 막혔다. "정답이 정확히
+# 하나인가"는 _verify_questions()의 LLM 검수(기준 2)가 의미 단위로 따로 보므로,
+# 분수에 대한 기계적 동치 검사는 빼고 원래 목적(순서만 바꾼 식)만 남긴다.
+# 나눗셈은 "÷"로 쓴 식만 계산한다.
+_SIMPLE_EXPR_RE = re.compile(r"^(\d+)\s*([+\-x×*÷])\s*(\d+)$")
 
 # correct_answer 정규화용 문자 집합(곧은/굽은 따옴표 + 마침표/쉼표) — 소스에서
 # 따옴표를 중첩해서 쓰지 않도록 chr()로 조합한다.
@@ -274,8 +282,8 @@ def _build_prompt(
         f"긍정형 표현과 부정형 표현을 한 문항 안에서 섞지 마세요. "
         f"(4) correct_answer를 정하기 전에 실제로 계산하거나 사실을 확인해서, 정답이 명확히 하나뿐이고 "
         f"나머지 오답들과 값·의미가 겹치지 않는지 확인하세요(특히 숫자를 순서만 바꾼 식이 실제로는 "
-        f"같은 값이 되지 않는지, 약분하면 같은 분수(예: 5/6과 10/12, 1/2과 3/6)가 보기에 함께 "
-        f"들어가지 않는지 검산하세요). "
+        f"같은 값이 되지 않는지, 계산 결과를 묻는 문항에서 정답과 같은 값의 다른 표기가 보기에 "
+        f"함께 들어가지 않는지(예: '1/2 + 1/3 = ?'에 5/6과 10/12를 둘 다 넣으면 정답이 두 개) 검산하세요). "
         f"(5) 수식은 LaTeX나 마크다운 문법(예: \\times, \\frac{{}}{{}}, \\sqrt{{}}, \\div, \\cdot, $...$) "
         f"없이 일반 텍스트로만 쓰세요 — 결과물은 서식이 적용되지 않는 일반 텍스트로 표시됩니다. "
         f"곱하기는 '×'나 'x', 나누기는 '÷'나 '/', 분수는 '30/100'처럼 일반 슬래시로 쓰세요. "
@@ -349,8 +357,8 @@ def _build_prompt_us(
         f"(4) Before settling on a correct_answer, actually calculate or verify the facts so there is "
         f"exactly one correct answer that doesn't overlap in value or meaning with the other options "
         f"(especially check that reordered numbers in an expression don't actually produce the same "
-        f"value, and that no two options are equivalent fractions -- e.g. 5/6 and 10/12, or 1/2 and "
-        f"3/6, are the same value and must not both appear). "
+        f"value, and that a computed answer isn't also offered in an equivalent form -- e.g. for "
+        f"'1/2 + 1/3 = ?' don't list both 5/6 and 10/12, since both would be correct). "
         f"(5) Write any math using plain text, not LaTeX or markdown notation (e.g. avoid \\times, "
         f"\\frac{{}}{{}}, \\sqrt{{}}, \\div, \\cdot, $...$) -- the output is displayed as unformatted "
         f"plain text. Use '×' or 'x' for multiplication, '÷' or '/' for division, and plain slashes "
@@ -625,10 +633,10 @@ def _parse_quiz_json(raw_text: str, locale: str = "ko") -> dict:
             # 식(예: "15+27"과 "30+12")이 실제로는 같은 값이라 정답이 여러 개가 되는
             # 문제가 실사용 중 반복적으로 발견됐다(quiz.py 모듈 docstring 참고).
             message = (
-                f"Question {i + 1} has options that evaluate to the same value "
-                "(e.g. equivalent fractions like 5/6 and 10/12, or a reordered expression). Please try again."
+                f"Question {i + 1} has options that evaluate to the same result "
+                "(e.g. the same expression reordered). Please try again."
                 if is_us
-                else f"{i + 1}번 문항의 보기 중 값이 같은 것이 있어요(예: 5/6과 10/12 같은 동치 분수, 순서만 바꾼 식). 다시 시도해주세요."
+                else f"{i + 1}번 문항의 보기 중 계산 결과가 같은 것이 있어요(예: 순서만 바꾼 식). 다시 시도해주세요."
             )
             raise QuizError(message)
         correct_answer = q.get("correct_answer")
