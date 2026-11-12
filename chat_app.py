@@ -112,6 +112,21 @@ USAGE_NOTICE_KO = (
     "LLM API로 전송되니 학생 개인정보는 입력하지 마세요."
 )
 
+def _log_from_callback(event: str, activity: str | None = None) -> None:
+    """위젯 on_click 콜백에서 이벤트를 남긴다.
+
+    콜백은 스크립트 본문보다 먼저, 다른 스레드에서 실행될 수 있어서 본문 맨 위의
+    bind_session()이 아직 안 된 상태다 — 실제 로그에서 download 이벤트의
+    session_id가 None으로 찍혔다(2026-11-12). 콜백 안에서 세션 ID를 다시 묶는다.
+    """
+    usage.bind_session(st.session_state.usage_session_id, st.session_state.get("usage_internal", False))
+    usage.log_event(event, activity=activity)
+
+
+def _log_download(activity: str) -> None:
+    _log_from_callback("download", activity)
+
+
 with st.sidebar:
     # 피드백 링크는 사이드바 맨 위(항상 보이는 곳)와, 결과가 처음 나온 직후
     # (_feedback_prompt — 사용자가 결과물을 막 본 순간) 두 군데에 둔다.
@@ -120,7 +135,8 @@ with st.sidebar:
             "💬 Give feedback (2 min)" if LOCALE == "us" else "💬 피드백 남기기 (2분)",
             FEEDBACK_URL,
             width="stretch",
-            on_click=lambda: usage.log_event("feedback_click"),
+            on_click=_log_from_callback,
+            args=("feedback_click",),
             key="feedback_sidebar",
         )
     st.markdown(USAGE_NOTICE_US if LOCALE == "us" else USAGE_NOTICE_KO)
@@ -139,12 +155,11 @@ def _feedback_prompt() -> None:
         "Tell me in 2 minutes →" if is_us else "2분 피드백 남기기 →",
         FEEDBACK_URL,
         type="tertiary",
-        on_click=lambda: usage.log_event("feedback_click"),
+        on_click=_log_from_callback,
+        args=("feedback_click",),
     )
 
 
-def _log_download(activity: str) -> None:
-    usage.log_event("download", activity=activity)
 
 
 if LOCALE == "us":

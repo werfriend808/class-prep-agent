@@ -63,6 +63,7 @@ def demo_us():
         (config, "FEEDBACK_URL"): config.FEEDBACK_URL,
     }
     events = []
+    rows = []
     config.LOCALE = "us"
     config.DEMO_MODE = True
     config.FEEDBACK_URL = "https://forms.example.com/feedback"
@@ -72,9 +73,9 @@ def demo_us():
     notion_writer.save_lesson_plan_to_notion = _boom
     docs_writer.create_and_write_doc = _boom
     forms_writer.create_quiz_form = _boom
-    usage.sink = lambda row: events.append(row["event"])
+    usage.sink = lambda row: (events.append(row["event"]), rows.append(row))
     try:
-        yield events
+        yield events, rows
     finally:
         for (mod, name), value in saved.items():
             setattr(mod, name, value)
@@ -111,7 +112,7 @@ def test_lesson_plan_flow_in_demo_mode(demo_us):
     assert not at.exception
     assert not at.error, [e.value for e in at.error]
 
-    events = demo_us
+    events, _rows = demo_us
     assert events.count("session_start") == 1  # 재실행(rerun)마다 다시 세지 않음
     assert "plan_generated" in events
     assert "worksheet_generated" in events
@@ -128,4 +129,10 @@ def test_quiz_flow_in_demo_mode(demo_us):
     assert any("Quiz" in h.value for h in at.subheader)
     labels = [b.label for b in at.get("download_button")]
     assert "Download quiz (.md)" in labels
-    assert "quiz_generated" in demo_us
+    events, rows = demo_us
+    assert "quiz_generated" in events
+
+    # 다운로드 버튼 콜백 이벤트에도 세션 ID가 붙어야 한다 (실사용 로그에서 None이었던 버그)
+    at.get("download_button")[0].click().run()
+    downloads = [r for r in rows if r["event"] == "download"]
+    assert downloads and downloads[-1]["session_id"] is not None
