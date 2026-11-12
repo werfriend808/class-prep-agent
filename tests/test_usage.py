@@ -30,8 +30,15 @@ def test_log_event_row_has_only_anonymous_fields(captured):
             "model": None,
             "input_tokens": None,
             "output_tokens": None,
+            "internal": False,
         }
     ]
+
+
+def test_internal_flag_is_recorded(captured):
+    usage.bind_session("dev-session", internal=True)
+    usage.log_event("session_start")
+    assert captured[-1]["internal"] is True
 
 
 def test_unknown_event_or_activity_rejected(captured):

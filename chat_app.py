@@ -93,9 +93,10 @@ st.markdown(
 # (llm.complete()가 토큰 수를 남길 때 이 세션 ID를 쓴다 — src/usage.py 참고)
 if "usage_session_id" not in st.session_state:
     st.session_state.usage_session_id = usage.new_session_id()
-    usage.bind_session(st.session_state.usage_session_id)
+    st.session_state.usage_internal = st.query_params.get("internal") == "1"
+    usage.bind_session(st.session_state.usage_session_id, st.session_state.usage_internal)
     usage.log_event("session_start")
-usage.bind_session(st.session_state.usage_session_id)
+usage.bind_session(st.session_state.usage_session_id, st.session_state.usage_internal)
 
 USAGE_NOTICE_US = (
     "**Anonymous usage stats.** To measure how this demo is used and what it costs, it records "

@@ -56,13 +56,14 @@ def new_session_id() -> str:
     return str(uuid.uuid4())
 
 
-def bind_session(session_id: str) -> None:
+def bind_session(session_id: str, internal: bool = False) -> None:
     """현재 스레드(=Streamlit 스크립트 실행 스레드)에 세션 ID를 묶는다.
 
     llm.complete()처럼 Streamlit을 모르는 모듈도 이벤트를 남길 수 있게, 앱이
     매 실행 시작마다 호출한다.
     """
     _local.session_id = session_id
+    _local.internal = internal
 
 
 def current_session_id() -> str | None:
@@ -117,6 +118,9 @@ def log_event(
         "model": model,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
+        # 개발자 본인 테스트(?internal=1로 접속)는 표시만 해두고 집계에서 뺀다.
+        # 이력서/README에 쓰는 숫자가 내 테스트로 부풀려지지 않게 하기 위함.
+        "internal": getattr(_local, "internal", False),
     }
     try:
         sink(row)
