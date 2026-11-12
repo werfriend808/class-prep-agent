@@ -20,12 +20,14 @@ anthropic SDK가 이미 의존하는 httpx로 충분하다. 테이블 스키마�
 from __future__ import annotations
 
 import threading
+import time
 import uuid
+from datetime import datetime, timezone
 from typing import Callable
 
 import httpx
 
-from .config import LOCALE, SUPABASE_KEY, SUPABASE_URL
+from .config import DAILY_LLM_CALL_LIMIT, LOCALE, SESSION_LLM_CALL_LIMIT, SUPABASE_KEY, SUPABASE_URL
 
 TABLE = "usage_events"
 
@@ -119,3 +121,89 @@ def log_event(
         sink(row)
     except Exception:  # noqa: BLE001
         pass
+
+
+# ============================================================
+# 비용 상한 (LLM 호출 수 기준)
+# ============================================================
+#
+# 두 겹이다:
+#   - 세션 한도: 한 탭에서 폭주하는 경우(버그로 인한 재시도 루프 포함)를 막는다.
+#     메모리에만 있으므로 새로고침하면 초기화된다 — 그래서 이것만으로는 부족하다.
+#   - 전역 일일 한도: 모든 방문자 합계. Supabase의 오늘자 llm_call 이벤트 수로
+#     센다(서버가 재시작돼도 유지됨). DB 조회는 60초마다만 하고 그 사이엔 이
+#     프로세스의 증가분을 더한다. DB를 못 읽으면 프로세스 내 카운터로라도 막는다.
+# 최종 안전장치는 코드 밖에 있다: Anthropic Console의 월 지출 한도(docs/deploy.md).
+
+
+class QuotaExceededError(RuntimeError):
+    """한도 초과. llm.complete()에서 올라가고, 기능 모듈들이 기존 에러 처리로 화면에 보여준다."""
+
+
+_quota_lock = threading.Lock()
+_session_calls: dict[str, int] = {}
+_local_day = {"day": None, "count": 0}
+_db_cache = {"day": None, "fetched_at": 0.0, "count": 0, "local_at_fetch": 0}
+_DB_REFRESH_SECONDS = 60
+
+
+def _today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _db_count_today(day: str) -> int | None:
+    """Supabase에서 오늘(UTC) llm_call 이벤트 수를 센다. 실패하면 None."""
+    if not (SUPABASE_URL and SUPABASE_KEY):
+        return None
+    try:
+        response = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/{TABLE}",
+            params={"select": "id", "event": "eq.llm_call", "created_at": f"gte.{day}T00:00:00Z"},
+            headers={**_headers(), "Prefer": "count=exact", "Range": "0-0"},
+            timeout=2.0,
+        )
+        content_range = response.headers.get("content-range", "")  # 예: "0-0/123", "*/0"
+        return int(content_range.rsplit("/", 1)[1])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _global_count_today(day: str) -> int:
+    local = _local_day["count"] if _local_day["day"] == day else 0
+    cache = _db_cache
+    if cache["day"] != day or time.monotonic() - cache["fetched_at"] > _DB_REFRESH_SECONDS:
+        db_count = _db_count_today(day)
+        if db_count is not None:
+            cache.update(day=day, fetched_at=time.monotonic(), count=db_count, local_at_fetch=local)
+    if cache["day"] == day:
+        return max(local, cache["count"] + (local - cache["local_at_fetch"]))
+    return local
+
+
+def _quota_message(kind: str) -> str:
+    if LOCALE == "us":
+        if kind == "daily":
+            return "This demo has reached today's usage limit (shared by all visitors). Please try again tomorrow."
+        return "You've reached this demo's per-session limit. Please come back later."
+    if kind == "daily":
+        return "오늘 데모 전체 사용 한도에 도달했어요(모든 방문자 합계). 내일 다시 시도해주세요."
+    return "이 세션의 데모 사용 한도에 도달했어요. 잠시 후 다시 이용해주세요."
+
+
+def check_quota() -> None:
+    """LLM 호출 1건을 허용할지 판단하고, 허용하면 카운트를 올린다. 초과면 QuotaExceededError."""
+    day = _today()
+    session_id = current_session_id() or "-"
+    with _quota_lock:
+        if _local_day["day"] != day:
+            _local_day.update(day=day, count=0)
+        if SESSION_LLM_CALL_LIMIT and _session_calls.get(session_id, 0) >= SESSION_LLM_CALL_LIMIT:
+            kind = "session"
+        elif DAILY_LLM_CALL_LIMIT and _global_count_today(day) >= DAILY_LLM_CALL_LIMIT:
+            kind = "daily"
+        else:
+            _session_calls[session_id] = _session_calls.get(session_id, 0) + 1
+            _local_day["count"] += 1
+            return
+    log_event("quota_blocked")
+    raise QuotaExceededError(_quota_message(kind))

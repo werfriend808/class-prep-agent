@@ -102,6 +102,14 @@ elif not ANTHROPIC_API_KEY:
 SUPABASE_URL = _setting("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = _setting("SUPABASE_KEY", "")
 
+# 비용 상한 (src/usage.py의 check_quota, llm.complete() 직전에 검사).
+# 단위는 "LLM 호출 수"다 — 비용은 호출 수에 비례하고, 퀴즈처럼 기능 하나가 호출을
+# 2번(생성+검수) 하는 경우도 정확히 반영된다. 0이면 무제한. 값을 안 주면 데모
+# 모드에선 기본 한도가 걸리고, 로컬 개발(연동 모드)에선 무제한이다 — 공개 배포에서
+# 설정을 깜빡해도 한도 없이 열리지 않게 하려는 것.
+DAILY_LLM_CALL_LIMIT = int(_setting("DAILY_LLM_CALL_LIMIT", "150" if DEMO_MODE else "0"))
+SESSION_LLM_CALL_LIMIT = int(_setting("SESSION_LLM_CALL_LIMIT", "30" if DEMO_MODE else "0"))
+
 # LLM_PROVIDER=anthropic일 때 쓸 Claude 모델. 공개 데모는 비용 때문에
 # CLAUDE_MODEL=claude-haiku-5-5로 배포하고, 품질이 부족하면 코드 수정 없이
 # secrets에서 모델 ID만 바꾼다. (SUMMARY_MODEL은 예전 이름 — 하위 호환용 별칭)

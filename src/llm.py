@@ -53,6 +53,7 @@ def complete(prompt: str, max_tokens: int = 1000) -> str:
 
     lesson_plan.py가 이 함수만 쓰고 provider를 신경 쓰지 않도록 하기 위한 어댑터.
     """
+    usage.check_quota()  # 공개 데모 비용 상한 — 초과면 QuotaExceededError (usage.py)
     if LLM_PROVIDER == "clova":
         client = _get_clova_client()
         response = client.chat.completions.create(
