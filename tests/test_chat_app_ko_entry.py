@@ -25,11 +25,13 @@ print("TITLE=" + at.title[0].value)
 
 
 def test_korean_entry_point_forces_korean_even_with_us_secrets():
-    env = {**os.environ, "LOCALE": "us", "DEMO_MODE": "1"}
+    # PYTHONIOENCODING: Windows 콘솔 기본 인코딩(cp949)은 제목의 이모지를 출력하지
+    # 못해서 하위 프로세스가 UnicodeEncodeError로 죽는다(Windows에서 실제로 발생).
+    env = {**os.environ, "LOCALE": "us", "DEMO_MODE": "1", "PYTHONIOENCODING": "utf-8"}
     env.pop("NOTION_API_KEY", None)
     out = subprocess.run(
         [sys.executable, "-c", SCRIPT, str(ROOT / "chat_app_ko.py")],
-        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120,
+        cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120,
     )
     assert out.returncode == 0, out.stderr[-2000:]
     assert "LOCALE=ko" in out.stdout
