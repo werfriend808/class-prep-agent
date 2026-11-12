@@ -480,8 +480,13 @@ def _render_discussion_activity() -> None:
 
         st.caption(
             "수정하고 싶은 점이 있으면 위 채팅창에 자유롭게 적어주세요 (예: '토론 쟁점을 3개로 줄여줘', "
-            "'토론 시간을 20분으로 늘려줘'). 계획안 수정 결과는 Notion에, 활동지에 영향 있는 수정이면 "
-            "학생 활동지(Google Docs)에도 자동으로 반영돼요. '활동지 난이도를 낮춰줘'처럼 메시지에 "
+            "'토론 시간을 20분으로 늘려줘'). "
+            + (
+                "활동지에 영향 있는 수정이면 학생 활동지도 자동으로 다시 만들어져요. "
+                if DEMO_MODE
+                else "계획안 수정 결과는 Notion에, 활동지에 영향 있는 수정이면 학생 활동지(Google Docs)에도 자동으로 반영돼요. "
+            )
+            + "'활동지 난이도를 낮춰줘'처럼 메시지에 "
             "'활동지'가 들어가면 계획안은 그대로 두고 활동지만 수정해요."
         )
 
@@ -719,8 +724,14 @@ def _render_discussion_activity_us() -> None:
 
         st.caption(
             "Type any revision requests in the chat above (e.g. 'shorten the discussion issues to "
-            "3 items', 'make the lesson flow fit a 30-minute class'). Revisions are saved back to the "
-            "same Notion page, and if they affect the worksheet, the worksheet is regenerated too. "
+            "3 items', 'make the lesson flow fit a 30-minute class'). "
+            + (
+                "If a revision affects the worksheet, the worksheet is regenerated too. "
+                if DEMO_MODE
+                else "Revisions are saved back to the same Notion page, and if they affect the worksheet, "
+                "the worksheet is regenerated too. "
+            )
+            + 
             "Mention 'worksheet' in your message to edit only the worksheet and leave the lesson plan as is."
         )
 
@@ -855,7 +866,8 @@ def _render_quiz_activity() -> None:
 
         st.caption(
             "수정하고 싶은 점이 있으면 위 채팅창에 자유롭게 적어주세요 (예: '3번 문제를 더 쉽게 해줘', "
-            "'문항을 서술형 대신 계속 객관식으로 늘려줘'). 수정 결과는 같은 Google Forms에 자동으로 반영돼요."
+            "'문항을 서술형 대신 계속 객관식으로 늘려줘')."
+            + ("" if DEMO_MODE else " 수정 결과는 같은 Google Forms에 자동으로 반영돼요.")
         )
 
 
@@ -989,7 +1001,8 @@ def _render_quiz_activity_us() -> None:
 
         st.caption(
             "Type any revision requests in the chat above (e.g. 'make question 3 easier', "
-            "'add more options to question 2'). Revisions are saved back to the same Google Form."
+            "'add more options to question 2')."
+            + ("" if DEMO_MODE else " Revisions are saved back to the same Google Form.")
         )
 
 
