@@ -84,6 +84,8 @@ def _complete_raw(prompt: str, max_tokens: int) -> str:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
         )
+        if getattr(response.choices[0], "finish_reason", None) == "length":
+            print(f"[llm] response truncated at max_tokens={max_tokens} (model={HCX_MODEL})")
         u = getattr(response, "usage", None)
         _record_call(HCX_MODEL, getattr(u, "prompt_tokens", None), getattr(u, "completion_tokens", None))
         return response.choices[0].message.content
@@ -98,6 +100,10 @@ def _complete_raw(prompt: str, max_tokens: int) -> str:
     )
     u = getattr(message, "usage", None)
     _record_call(SUMMARY_MODEL, getattr(u, "input_tokens", None), getattr(u, "output_tokens", None))
+    if getattr(message, "stop_reason", None) == "max_tokens":
+        # 짧게 끊겨도 되는 호출(질의 분류 20토큰, 요약 300토큰)도 있어서 에러로
+        # 만들지는 않고, JSON 파싱 실패의 원인을 바로 알 수 있게 로그만 남긴다.
+        print(f"[llm] response truncated at max_tokens={max_tokens} (model={SUMMARY_MODEL})")
     text = _text_from_message(message)
     if not text:
         # 본문이 비면 JSON 파서가 "형식이 깨졌다"는 엉뚱한 에러를 내서 원인을

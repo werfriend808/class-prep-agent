@@ -489,7 +489,8 @@ def _verify_questions(subject: str, grade: str, topic: str, questions: list[dict
 
 def _generate_once(subject: str, grade: str, topic: str, prompt: str, locale: str = "ko") -> dict:
     try:
-        raw_text = complete(prompt, max_tokens=2000)
+        # 4000: lesson_plan.py와 같은 이유(긴 JSON이 한도에서 잘리는 문제)로 여유를 둔다.
+        raw_text = complete(prompt, max_tokens=4000)
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
         message = (
             f"Failed to generate the quiz (LLM call error): {e}"
