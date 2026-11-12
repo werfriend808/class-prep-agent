@@ -77,3 +77,32 @@ def test_get_clova_client_raises_when_key_missing():
     finally:
         llm.HCX_API_KEY = original_key
         llm._clova_client = original_client
+
+
+def test_complete_skips_non_text_blocks():
+    """thinking 블록이 앞에 와도 text 블록만 반환해야 한다."""
+    original_provider = llm.LLM_PROVIDER
+    original_get_client = llm.get_client
+    llm.LLM_PROVIDER = "anthropic"
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="thinking", thinking="..."),
+                    SimpleNamespace(type="text", text='{"a": '),
+                    SimpleNamespace(type="text", text="1}"),
+                ]
+            )
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    llm.get_client = lambda: _FakeClient()
+    try:
+        result = llm.complete("x", max_tokens=100)
+    finally:
+        llm.LLM_PROVIDER = original_provider
+        llm.get_client = original_get_client
+
+    assert result == '{"a": 1}'

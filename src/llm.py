@@ -67,4 +67,19 @@ def complete(prompt: str, max_tokens: int = 1000) -> str:
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return _text_from_message(message)
+
+
+def _text_from_message(message) -> str:
+    """Claude 응답의 text 블록만 이어 붙인다.
+
+    예전엔 `message.content[0].text`를 바로 썼는데, 최신 모델은 응답 앞에
+    thinking 블록이 올 수 있어서 첫 블록이 text라는 보장이 없다. 모델을
+    secrets로 바꿀 수 있게 하면서 이 가정을 없앴다.
+    """
+    parts = [
+        block.text
+        for block in message.content
+        if getattr(block, "type", "text") == "text" and getattr(block, "text", None)
+    ]
+    return "".join(parts)

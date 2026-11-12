@@ -96,5 +96,8 @@ elif not ANTHROPIC_API_KEY:
         "요약/질의분류(실전 1), 수업계획안 생성(실전 2) 모두 실패합니다."
     )
 
-# 요약에 사용할 Claude 모델
-SUMMARY_MODEL = "claude-sonnet-5"
+# LLM_PROVIDER=anthropic일 때 쓸 Claude 모델. 공개 데모는 비용 때문에
+# CLAUDE_MODEL=claude-haiku-5-5로 배포하고, 품질이 부족하면 코드 수정 없이
+# secrets에서 모델 ID만 바꾼다. (SUMMARY_MODEL은 예전 이름 — 하위 호환용 별칭)
+CLAUDE_MODEL = _setting("CLAUDE_MODEL", "claude-sonnet-5")
+SUMMARY_MODEL = CLAUDE_MODEL
