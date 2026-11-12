@@ -176,7 +176,9 @@ def generate_lesson_plan(
     # get_provider()(=.env의 CURRICULUM_PROVIDER/LOCALE)에 기대면 LOCALE=us를
     # 안 걸어놓은 환경(예: 테스트)에서 이 경로가 조용히 NCIC로 매칭을 시도하게
     # 된다. locale="ko"(기본값)는 기존처럼 ambient 기본값을 그대로 쓴다.
-    provider = provider or get_provider("common_core_math" if locale == "us" else None)
+    # 2026-11-12: 한국어 경로도 "ncic"를 명시한다. 기본 LOCALE이 "us"로 바뀌면서,
+    # None(=전역 기본값)에 기대면 locale="ko" 호출이 Common Core 성취기준을 쓰게 된다.
+    provider = provider or get_provider("common_core_math" if locale == "us" else "ncic")
     keywords = extract_keywords(topic)
     records = provider.match_standards(subject, grade=grade, keywords=keywords, limit=5)
 

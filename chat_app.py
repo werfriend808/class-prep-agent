@@ -374,7 +374,7 @@ def _render_discussion_activity() -> None:
     conv: ConversationState = st.session_state.conv
 
     st.caption(
-        f"과목({', '.join(get_provider().subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
+        f"과목({', '.join(get_provider('ncic').subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
         "근거한 토의·토론 수업계획안을 만들고 Notion에 자동으로 저장해드려요. 생성 후에도 채팅으로 "
         "계속 수정을 요청할 수 있고, 원하면 학생 활동지도 만들어서 Google Docs에 저장할 수 있어요."
     )
@@ -817,7 +817,7 @@ def _render_quiz_activity() -> None:
     quiz_conv: QuizConversationState = st.session_state.quiz_conv
 
     st.caption(
-        f"과목({', '.join(get_provider().subjects())}), 학년, 확인하고 싶은 단원/주제를 알려주시면 "
+        f"과목({', '.join(get_provider('ncic').subjects())}), 학년, 확인하고 싶은 단원/주제를 알려주시면 "
         "객관식 퀴즈(기본 4지선다, 보기 개수는 채팅으로 조정 가능)를 만들고 Google Forms에 "
         "자동으로 저장해드려요(정답 자동 채점 포함). 생성 후에도 채팅으로 계속 수정을 요청할 수 있어요."
     )

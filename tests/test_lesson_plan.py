@@ -287,3 +287,33 @@ def test_generate_lesson_plan_us_locale_error_messages_are_english():
             raise AssertionError("LessonPlanError가 발생해야 함")
     finally:
         lesson_plan.complete = original
+
+
+def test_korean_lesson_plan_uses_ncic_even_when_default_locale_is_us():
+    """기본 LOCALE이 us여도 locale="ko" 계획안은 NCIC 성취기준을 써야 한다."""
+    import src.curriculum as curriculum
+    import src.lesson_plan as lp
+
+    used = {}
+    original_get_provider = lp.get_provider
+    original_default = curriculum.CURRICULUM_PROVIDER
+
+    def _spy_get_provider(name=None):
+        used["name"] = name
+        return original_get_provider(name)
+
+    lp.get_provider = _spy_get_provider
+    curriculum.CURRICULUM_PROVIDER = "common_core_math"  # 기본값이 영어인 상황
+    original_complete = lp.complete
+    lp.complete = lambda prompt, max_tokens=0: "not json"
+    try:
+        try:
+            lp.generate_lesson_plan("사회", "기후 변화", grade="고1", locale="ko")
+        except lp.LessonPlanError:
+            pass  # 응답이 JSON이 아니라 실패하는 건 상관없음 — provider 선택만 확인
+    finally:
+        lp.get_provider = original_get_provider
+        lp.complete = original_complete
+        curriculum.CURRICULUM_PROVIDER = original_default
+
+    assert used["name"] == "ncic"
