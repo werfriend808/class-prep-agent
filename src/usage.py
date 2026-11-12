@@ -44,6 +44,7 @@ EVENTS = frozenset(
         "download",
         "llm_call",
         "quota_blocked",
+        "feedback_click",
     }
 )
 ACTIVITIES = frozenset({"lesson_plan", "worksheet", "quiz"})

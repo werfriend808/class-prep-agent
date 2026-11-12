@@ -1,4 +1,4 @@
-streamlit>=1.38
+streamlit>=1.64  # link_button on_click/width (피드백 클릭 집계)
 anthropic>=0.40
 mcp>=1.2
 python-dotenv>=1.0

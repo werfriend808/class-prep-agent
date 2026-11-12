@@ -60,10 +60,12 @@ def demo_us():
         (docs_writer, "create_and_write_doc"): docs_writer.create_and_write_doc,
         (forms_writer, "create_quiz_form"): forms_writer.create_quiz_form,
         (usage, "sink"): usage.sink,
+        (config, "FEEDBACK_URL"): config.FEEDBACK_URL,
     }
     events = []
     config.LOCALE = "us"
     config.DEMO_MODE = True
+    config.FEEDBACK_URL = "https://forms.example.com/feedback"
     lesson_plan.generate_lesson_plan = _fake_plan
     worksheet.generate_worksheet = _fake_worksheet
     quiz.generate_quiz = _fake_quiz
@@ -92,6 +94,9 @@ def test_lesson_plan_flow_in_demo_mode(demo_us):
     assert not at.error, [e.value for e in at.error]
     assert any("Discussion Lesson Plan" in h.value for h in at.subheader)
     assert any("Demo mode" in i.value for i in at.info)
+    # 피드백 링크: 사이드바 + 결과 직후 두 군데
+    feedback_links = [e for e in at.get("link_button") if "forms.example.com" in e.proto.url]
+    assert len(feedback_links) == 2
     labels = [b.label for b in at.get("download_button")]
     assert "Download lesson plan (.md)" in labels
 

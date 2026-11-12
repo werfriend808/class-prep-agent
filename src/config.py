@@ -102,6 +102,9 @@ elif not ANTHROPIC_API_KEY:
 SUPABASE_URL = _setting("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = _setting("SUPABASE_KEY", "")
 
+# 피드백 폼(예: Google Form) 링크. 비어 있으면 앱에서 피드백 링크를 숨긴다.
+FEEDBACK_URL = _setting("FEEDBACK_URL", "")
+
 # 비용 상한 (src/usage.py의 check_quota, llm.complete() 직전에 검사).
 # 단위는 "LLM 호출 수"다 — 비용은 호출 수에 비례하고, 퀴즈처럼 기능 하나가 호출을
 # 2번(생성+검수) 하는 경우도 정확히 반영된다. 0이면 무제한. 값을 안 주면 데모

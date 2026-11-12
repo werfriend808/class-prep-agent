@@ -44,7 +44,7 @@ import asyncio
 import streamlit as st
 
 from src import usage
-from src.config import DEMO_MODE, LOCALE
+from src.config import DEMO_MODE, FEEDBACK_URL, LOCALE
 from src.conversation import ConversationState, Phase, QuizConversationState
 from src.curriculum import get_provider
 from src.edit_propagation import classify_edit_target, worksheet_needs_update
@@ -112,7 +112,34 @@ USAGE_NOTICE_KO = (
 )
 
 with st.sidebar:
+    # 피드백 링크는 사이드바 맨 위(항상 보이는 곳)와, 결과가 처음 나온 직후
+    # (_feedback_prompt — 사용자가 결과물을 막 본 순간) 두 군데에 둔다.
+    if FEEDBACK_URL:
+        st.link_button(
+            "💬 Give feedback (2 min)" if LOCALE == "us" else "💬 피드백 남기기 (2분)",
+            FEEDBACK_URL,
+            width="stretch",
+            on_click=lambda: usage.log_event("feedback_click"),
+            key="feedback_sidebar",
+        )
     st.markdown(USAGE_NOTICE_US if LOCALE == "us" else USAGE_NOTICE_KO)
+
+
+def _feedback_prompt() -> None:
+    if not FEEDBACK_URL:
+        return
+    is_us = LOCALE == "us"
+    st.caption(
+        "Was this useful for your class? Your answer directly shapes what gets fixed next."
+        if is_us
+        else "수업 준비에 도움이 됐나요? 다음에 무엇을 고칠지 정하는 데 그대로 반영돼요."
+    )
+    st.link_button(
+        "Tell me in 2 minutes →" if is_us else "2분 피드백 남기기 →",
+        FEEDBACK_URL,
+        type="tertiary",
+        on_click=lambda: usage.log_event("feedback_click"),
+    )
 
 
 def _log_download(activity: str) -> None:
@@ -444,6 +471,7 @@ def _render_discussion_activity() -> None:
                     st.write(f"**{label}**")
                     st.write(conv.worksheet.get(key, "") if conv.worksheet else "")
 
+        _feedback_prompt()
         st.divider()
         if st.button("새로 만들기", key="reset"):
             conv.reset()
@@ -682,6 +710,7 @@ def _render_discussion_activity_us() -> None:
                     st.write(f"**{label}**")
                     st.write(conv.worksheet.get(key, "") if conv.worksheet else "")
 
+        _feedback_prompt()
         st.divider()
         if st.button("Start over", key="reset_us"):
             conv.reset()
@@ -817,6 +846,7 @@ def _render_quiz_activity() -> None:
         else:
             st.warning("아직 Google Forms에 반영되지 않았어요. 위쪽 오류 메시지를 확인해주세요.")
 
+        _feedback_prompt()
         st.divider()
         if st.button("새로 만들기", key="quiz_reset"):
             quiz_conv.reset()
@@ -950,6 +980,7 @@ def _render_quiz_activity_us() -> None:
         else:
             st.warning("Not yet saved to Google Forms — check the error message above.")
 
+        _feedback_prompt()
         st.divider()
         if st.button("Start over", key="quiz_reset_us"):
             quiz_conv.reset()
