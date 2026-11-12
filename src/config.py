@@ -118,3 +118,10 @@ SESSION_LLM_CALL_LIMIT = int(_setting("SESSION_LLM_CALL_LIMIT", "30" if DEMO_MOD
 # secrets에서 모델 ID만 바꾼다. (SUMMARY_MODEL은 예전 이름 — 하위 호환용 별칭)
 CLAUDE_MODEL = _setting("CLAUDE_MODEL", "claude-sonnet-5")
 SUMMARY_MODEL = CLAUDE_MODEL
+# Claude thinking 설정. "disabled"면 요청에 thinking={"type": "disabled"}를 보내고,
+# 비워두면 보내지 않는다(모델 기본값). 최신 모델은 thinking이 기본으로 켜져 있고
+# thinking 토큰도 max_tokens에 포함된다 — Haiku 5.5로 실제 호출해보니 2000토큰을
+# 전부 thinking에 쓰고 본문 텍스트가 0자였다(2026-11-12, stop_reason=max_tokens).
+# 이 앱의 호출은 정해진 JSON 스키마를 채우는 작업이라 thinking을 끈다. 모델마다
+# 끌 수 있는지가 달라서(예: Opus 5.5는 끄면 400) 코드에 고정하지 않고 설정으로 둔다.
+CLAUDE_THINKING = _setting("CLAUDE_THINKING", "")

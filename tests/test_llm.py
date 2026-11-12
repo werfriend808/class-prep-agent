@@ -134,3 +134,28 @@ def test_demo_mode_hides_provider_error_details():
             assert "credit balance" in str(e)
     finally:
         llm.LLM_PROVIDER, llm.get_client, llm.DEMO_MODE, llm.LOCALE = saved
+
+
+def test_thinking_setting_is_sent_and_empty_text_is_reported():
+    saved = (llm.LLM_PROVIDER, llm.get_client, llm.CLAUDE_THINKING, llm.DEMO_MODE)
+    llm.LLM_PROVIDER, llm.CLAUDE_THINKING, llm.DEMO_MODE = "anthropic", "disabled", False
+    seen = {}
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            # thinking이 출력 한도를 다 써서 text 블록이 없는 응답
+            return SimpleNamespace(content=[SimpleNamespace(type="thinking")], stop_reason="max_tokens")
+
+    llm.get_client = lambda: SimpleNamespace(messages=_FakeMessages())
+    try:
+        try:
+            llm.complete("x", max_tokens=10)
+        except RuntimeError as e:
+            assert "stop_reason=max_tokens" in str(e)
+        else:
+            raise AssertionError("빈 응답이면 원인을 담은 에러가 나야 함")
+    finally:
+        llm.LLM_PROVIDER, llm.get_client, llm.CLAUDE_THINKING, llm.DEMO_MODE = saved
+
+    assert seen["extra_body"] == {"thinking": {"type": "disabled"}}

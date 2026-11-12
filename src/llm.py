@@ -18,7 +18,7 @@ from __future__ import annotations
 import anthropic
 
 from . import usage
-from .config import ANTHROPIC_API_KEY, DEMO_MODE, HCX_API_KEY, HCX_MODEL, LLM_PROVIDER, LOCALE, SUMMARY_MODEL
+from .config import ANTHROPIC_API_KEY, CLAUDE_THINKING, DEMO_MODE, HCX_API_KEY, HCX_MODEL, LLM_PROVIDER, LOCALE, SUMMARY_MODEL
 
 _anthropic_client: anthropic.Anthropic | None = None
 _clova_client = None  # openai.OpenAI, 지연 import
@@ -89,14 +89,21 @@ def _complete_raw(prompt: str, max_tokens: int) -> str:
         return response.choices[0].message.content
 
     client = get_client()
+    extra = {"extra_body": {"thinking": {"type": CLAUDE_THINKING}}} if CLAUDE_THINKING else {}
     message = client.messages.create(
         model=SUMMARY_MODEL,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
+        **extra,
     )
     u = getattr(message, "usage", None)
     _record_call(SUMMARY_MODEL, getattr(u, "input_tokens", None), getattr(u, "output_tokens", None))
-    return _text_from_message(message)
+    text = _text_from_message(message)
+    if not text:
+        # 본문이 비면 JSON 파서가 "형식이 깨졌다"는 엉뚱한 에러를 내서 원인을
+        # 숨긴다. 출력 한도를 thinking이 다 쓴 경우가 대표적이라 stop_reason을 남긴다.
+        raise RuntimeError(f"model returned no text (stop_reason={getattr(message, 'stop_reason', None)})")
+    return text
 
 
 def _record_call(model: str, input_tokens: int | None, output_tokens: int | None) -> None:
