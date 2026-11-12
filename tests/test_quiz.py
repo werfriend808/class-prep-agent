@@ -171,13 +171,14 @@ def test_try_eval_simple_expr_evaluates_basic_ops():
     assert _try_eval_simple_expr("3x4") == 12
     assert _try_eval_simple_expr("4×3") == 12
     assert _try_eval_simple_expr("9-4") == 5
-    assert _try_eval_simple_expr("8/2") == 4
+    assert _try_eval_simple_expr("8÷2") == 4
+    assert _try_eval_simple_expr("8/2") is None  # "a/b"는 분수 표기로 보고 계산하지 않음
 
 
 def test_try_eval_simple_expr_returns_none_for_non_expr_or_division_by_zero():
     assert _try_eval_simple_expr("419") is None  # 결과값만 있는 보기 — 식이 아님
     assert _try_eval_simple_expr("칠 곱하기 팔은 오십육") is None  # 문장형 보기
-    assert _try_eval_simple_expr("5/0") is None
+    assert _try_eval_simple_expr("5÷0") is None
 
 
 def test_parse_quiz_json_raises_when_options_have_duplicate_text():
@@ -201,7 +202,7 @@ def test_parse_quiz_json_raises_when_simple_expr_options_tie():
     try:
         _parse_quiz_json(json.dumps(data))
     except QuizError as e:
-        assert "값이 같은" in str(e)
+        assert "계산 결과" in str(e)
     else:
         raise AssertionError("QuizError가 발생해야 함")
 
@@ -727,17 +728,35 @@ def test_retry_prompt_includes_first_rejection_reason():
     assert "Question 3 has options that evaluate to the same value" in prompts[1]
 
 
-def test_equivalent_fraction_options_are_rejected():
-    import pytest
+def test_fraction_options_are_not_treated_as_division():
+    """분수 표기 보기(5/6, 10/12)는 코드 동치 검사에서 거부하지 않는다.
 
+    "같은 값을 다른 형태로" 쓰는 문항(예: 1/2을 분모 6으로)이 분수 단원에선 흔하고,
+    정답 유일성은 LLM 검수가 의미 단위로 본다. 배포 환경에서 이 검사 때문에 분수
+    퀴즈가 계속 실패했다(2026-11-12).
+    """
     import json
 
     import src.quiz as quiz
 
     raw = json.dumps({"questions": [{
-        "question": "1/2 + 1/3 = ?", "options": ["5/6", "10/12", "2/5", "1/6"],
-        "correct_answer": "5/6", "explanation": "LCD 6",
+        "question": "Rewrite 1/2 with a denominator of 6.", "options": ["3/6", "1/2", "2/6", "1/6"],
+        "correct_answer": "3/6", "explanation": "Multiply top and bottom by 3.",
     }]})
-    with pytest.raises(quiz.QuizError) as exc:
+    result = quiz._parse_quiz_json(raw, "us")
+    assert result["questions"][0]["correct_index"] == 0
+
+
+def test_reordered_division_with_division_sign_still_rejected():
+    import json
+
+    import pytest
+
+    import src.quiz as quiz
+
+    raw = json.dumps({"questions": [{
+        "question": "Which equals 4?", "options": ["8÷2", "12÷3", "9÷3", "10÷5"],
+        "correct_answer": "8÷2", "explanation": "8÷2=4",
+    }]})
+    with pytest.raises(quiz.QuizError):
         quiz._parse_quiz_json(raw, "us")
-    assert "equivalent fractions" in str(exc.value)
