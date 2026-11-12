@@ -201,7 +201,7 @@ def test_parse_quiz_json_raises_when_simple_expr_options_tie():
     try:
         _parse_quiz_json(json.dumps(data))
     except QuizError as e:
-        assert "계산 결과" in str(e)
+        assert "값이 같은" in str(e)
     else:
         raise AssertionError("QuizError가 발생해야 함")
 
@@ -700,3 +700,44 @@ def test_generate_quiz_ko_locale_is_default_and_unaffected():
         quiz.complete = original
     assert result["locale"] == "ko"
     assert len(result["questions"]) == QUESTION_COUNT
+
+
+def test_retry_prompt_includes_first_rejection_reason():
+    """첫 시도가 검증에 걸리면, 재시도 프롬프트에 거절 사유가 들어가야 한다."""
+    import src.quiz as quiz
+
+    prompts = []
+    original = quiz._generate_once
+
+    def _fake_generate_once(subject, grade, topic, prompt, locale="ko"):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            raise quiz.QuizError("Question 3 has options that evaluate to the same value.")
+        return {"questions": [{"question": "q", "options": ["a", "b"], "correct_index": 0}]}
+
+    quiz._generate_once = _fake_generate_once
+    try:
+        quiz.generate_quiz("Math", "fractions", grade="5", locale="us")
+    finally:
+        quiz._generate_once = original
+
+    assert len(prompts) == 2
+    assert "Question 3 has options that evaluate to the same value" not in prompts[0]
+    assert "previous attempt was rejected" in prompts[1]
+    assert "Question 3 has options that evaluate to the same value" in prompts[1]
+
+
+def test_equivalent_fraction_options_are_rejected():
+    import pytest
+
+    import json
+
+    import src.quiz as quiz
+
+    raw = json.dumps({"questions": [{
+        "question": "1/2 + 1/3 = ?", "options": ["5/6", "10/12", "2/5", "1/6"],
+        "correct_answer": "5/6", "explanation": "LCD 6",
+    }]})
+    with pytest.raises(quiz.QuizError) as exc:
+        quiz._parse_quiz_json(raw, "us")
+    assert "equivalent fractions" in str(exc.value)
