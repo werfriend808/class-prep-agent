@@ -274,7 +274,8 @@ def _build_prompt(
         f"긍정형 표현과 부정형 표현을 한 문항 안에서 섞지 마세요. "
         f"(4) correct_answer를 정하기 전에 실제로 계산하거나 사실을 확인해서, 정답이 명확히 하나뿐이고 "
         f"나머지 오답들과 값·의미가 겹치지 않는지 확인하세요(특히 숫자를 순서만 바꾼 식이 실제로는 "
-        f"같은 값이 되지 않는지 검산하세요). "
+        f"같은 값이 되지 않는지, 약분하면 같은 분수(예: 5/6과 10/12, 1/2과 3/6)가 보기에 함께 "
+        f"들어가지 않는지 검산하세요). "
         f"(5) 수식은 LaTeX나 마크다운 문법(예: \\times, \\frac{{}}{{}}, \\sqrt{{}}, \\div, \\cdot, $...$) "
         f"없이 일반 텍스트로만 쓰세요 — 결과물은 서식이 적용되지 않는 일반 텍스트로 표시됩니다. "
         f"곱하기는 '×'나 'x', 나누기는 '÷'나 '/', 분수는 '30/100'처럼 일반 슬래시로 쓰세요. "
@@ -348,7 +349,8 @@ def _build_prompt_us(
         f"(4) Before settling on a correct_answer, actually calculate or verify the facts so there is "
         f"exactly one correct answer that doesn't overlap in value or meaning with the other options "
         f"(especially check that reordered numbers in an expression don't actually produce the same "
-        f"value). "
+        f"value, and that no two options are equivalent fractions -- e.g. 5/6 and 10/12, or 1/2 and "
+        f"3/6, are the same value and must not both appear). "
         f"(5) Write any math using plain text, not LaTeX or markdown notation (e.g. avoid \\times, "
         f"\\frac{{}}{{}}, \\sqrt{{}}, \\div, \\cdot, $...$) -- the output is displayed as unformatted "
         f"plain text. Use '×' or 'x' for multiplication, '÷' or '/' for division, and plain slashes "
@@ -489,7 +491,8 @@ def _verify_questions(subject: str, grade: str, topic: str, questions: list[dict
 
 def _generate_once(subject: str, grade: str, topic: str, prompt: str, locale: str = "ko") -> dict:
     try:
-        raw_text = complete(prompt, max_tokens=2000)
+        # 4000: lesson_plan.py와 같은 이유(긴 JSON이 한도에서 잘리는 문제)로 여유를 둔다.
+        raw_text = complete(prompt, max_tokens=4000)
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
         message = (
             f"Failed to generate the quiz (LLM call error): {e}"
@@ -500,6 +503,18 @@ def _generate_once(subject: str, grade: str, topic: str, prompt: str, locale: st
     result = _parse_quiz_json(raw_text, locale)
     _verify_questions(subject, grade, topic, result["questions"], locale)
     return result
+
+
+def _retry_feedback(error_message: str, locale: str) -> str:
+    if locale == "us":
+        return (
+            f"\n\nIMPORTANT: Your previous attempt was rejected for this reason: {error_message} "
+            "Generate the quiz again and make sure this problem does not happen."
+        )
+    return (
+        f"\n\n중요: 이전 시도는 다음 이유로 거부됐어요: {error_message} "
+        "이 문제가 다시 생기지 않도록 퀴즈를 다시 만들어주세요."
+    )
 
 
 def generate_quiz(
@@ -538,7 +553,11 @@ def generate_quiz(
 
     try:
         result = _generate_once(subject, grade, topic, prompt, locale)
-    except QuizError:
+    except QuizError as first_error:
+        # 재시도 때 같은 프롬프트를 그대로 보내면 모델이 같은 실수를 반복한다 — Haiku
+        # 5.5 실사용에서 "보기 중 동치 분수" 검증에 두 번 연속 걸려 실패했다(2026-11-12).
+        # 거절 사유를 프롬프트 끝에 붙여서 무엇을 고쳐야 하는지 알려준다.
+        prompt = prompt + _retry_feedback(str(first_error), locale)
         result = _generate_once(subject, grade, topic, prompt, locale)
 
     result["subject"] = subject
@@ -606,10 +625,10 @@ def _parse_quiz_json(raw_text: str, locale: str = "ko") -> dict:
             # 식(예: "15+27"과 "30+12")이 실제로는 같은 값이라 정답이 여러 개가 되는
             # 문제가 실사용 중 반복적으로 발견됐다(quiz.py 모듈 docstring 참고).
             message = (
-                f"Question {i + 1} has options that evaluate to the same result "
-                "(e.g. the same expression reordered). Please try again."
+                f"Question {i + 1} has options that evaluate to the same value "
+                "(e.g. equivalent fractions like 5/6 and 10/12, or a reordered expression). Please try again."
                 if is_us
-                else f"{i + 1}번 문항의 보기 중 계산 결과가 같은 것이 있어요(예: 순서만 바꾼 식). 다시 시도해주세요."
+                else f"{i + 1}번 문항의 보기 중 값이 같은 것이 있어요(예: 5/6과 10/12 같은 동치 분수, 순서만 바꾼 식). 다시 시도해주세요."
             )
             raise QuizError(message)
         correct_answer = q.get("correct_answer")
@@ -693,3 +712,38 @@ def _parse_quiz_json(raw_text: str, locale: str = "ko") -> dict:
         )
 
     return {"questions": validated}
+
+
+def quiz_to_markdown(draft: dict) -> str:
+    """generate_quiz() 결과를 다운로드용 마크다운으로 변환한다.
+
+    데모 모드(Google Forms 연동 없음)에서 사용자가 퀴즈를 가져갈 수 있는 유일한
+    경로라서, 정답/해설은 문항 바로 아래가 아니라 맨 끝 "Answer key"/"정답"
+    섹션에 모아 둔다 — 문항 부분만 그대로 복사해 학생에게 나눠줄 수 있게.
+    """
+    is_us = draft.get("locale") == "us"
+    letters = "ABCDEFGH"
+    title = f"{draft.get('topic', '')} — Quiz" if is_us else f"{draft.get('topic', '')} 퀴즈"
+    meta = (
+        f"**Subject**: {draft.get('subject', '')}  |  **Grade**: {draft.get('grade', '')}"
+        if is_us
+        else f"**과목**: {draft.get('subject', '')}  |  **대상**: {draft.get('grade', '')}"
+    )
+    lines = [f"# {title}", "", meta, ""]
+    questions = draft.get("questions", [])
+    for i, q in enumerate(questions, start=1):
+        lines.append(f"{i}. {q.get('question', '')}")
+        for j, option in enumerate(q.get("options", [])):
+            lines.append(f"   - {letters[j] if j < len(letters) else j + 1}. {option}")
+        lines.append("")
+
+    lines.append("## Answer key" if is_us else "## 정답 및 해설")
+    for i, q in enumerate(questions, start=1):
+        idx = q.get("correct_index", 0)
+        letter = letters[idx] if 0 <= idx < len(letters) else str(idx + 1)
+        line = f"{i}. {letter}"
+        if q.get("explanation"):
+            line += f" — {q['explanation']}"
+        lines.append(line)
+    lines.append("")
+    return "\n".join(lines)

@@ -137,7 +137,10 @@ def _build_prompt_us(
 
 def _generate_once(prompt: str, sections: list[str] = PLAN_SECTIONS, locale: str = "ko") -> dict:
     try:
-        raw_text = complete(prompt, max_tokens=2000)
+        # 6000: 8개 섹션 JSON은 2000토큰을 넘는다 — Haiku 5.5 실측에서 2000토큰으로는
+        # 6번째 섹션(lesson_flow)에서 잘렸다(2026-11-12). 과금은 실제 생성한 만큼만이고
+        # 호출 수 한도(usage.check_quota)는 그대로라 비용 상한은 유지된다.
+        raw_text = complete(prompt, max_tokens=6000)
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
         message = (
             f"Failed to generate the lesson plan (LLM call error): {e}"

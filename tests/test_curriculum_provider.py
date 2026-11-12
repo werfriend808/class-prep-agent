@@ -18,7 +18,17 @@ from src.curriculum import (
 
 
 def test_get_provider_defaults_to_ncic():
-    provider = get_provider()
+    # get_provider()의 기본값은 config.CURRICULUM_PROVIDER(= .env의 LOCALE에서 유도)를
+    # 따른다. 개발자 .env가 LOCALE=us면 기본값이 common_core_math가 되므로, 여기선
+    # "설정이 기본값(ncic)일 때"를 고정해서 .env와 무관하게 검증한다.
+    import src.curriculum as curriculum
+
+    original = curriculum.CURRICULUM_PROVIDER
+    curriculum.CURRICULUM_PROVIDER = "ncic"
+    try:
+        provider = get_provider()
+    finally:
+        curriculum.CURRICULUM_PROVIDER = original
     assert isinstance(provider, NCICProvider)
     assert provider.id == "ncic"
 

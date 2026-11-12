@@ -77,3 +77,85 @@ def test_get_clova_client_raises_when_key_missing():
     finally:
         llm.HCX_API_KEY = original_key
         llm._clova_client = original_client
+
+
+def test_complete_skips_non_text_blocks():
+    """thinking 블록이 앞에 와도 text 블록만 반환해야 한다."""
+    original_provider = llm.LLM_PROVIDER
+    original_get_client = llm.get_client
+    llm.LLM_PROVIDER = "anthropic"
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(type="thinking", thinking="..."),
+                    SimpleNamespace(type="text", text='{"a": '),
+                    SimpleNamespace(type="text", text="1}"),
+                ]
+            )
+
+    class _FakeClient:
+        messages = _FakeMessages()
+
+    llm.get_client = lambda: _FakeClient()
+    try:
+        result = llm.complete("x", max_tokens=100)
+    finally:
+        llm.LLM_PROVIDER = original_provider
+        llm.get_client = original_get_client
+
+    assert result == '{"a": 1}'
+
+
+def test_demo_mode_hides_provider_error_details():
+    """데모 모드에선 크레딧 부족 같은 원본 에러가 사용자 문구로 바뀌어야 한다."""
+    saved = (llm.LLM_PROVIDER, llm.get_client, llm.DEMO_MODE, llm.LOCALE)
+    llm.LLM_PROVIDER, llm.DEMO_MODE, llm.LOCALE = "anthropic", True, "us"
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("Error code: 400 - credit balance is too low, request_id=req_123")
+
+    llm.get_client = lambda: SimpleNamespace(messages=_FakeMessages())
+    try:
+        try:
+            llm.complete("x", max_tokens=10)
+        except llm.LLMServiceError as e:
+            assert "temporarily unavailable" in str(e)
+            assert "req_123" not in str(e) and "credit" not in str(e)
+        else:
+            raise AssertionError("LLMServiceError가 나야 함")
+
+        llm.DEMO_MODE = False  # 로컬 개발: 원본 그대로
+        try:
+            llm.complete("x", max_tokens=10)
+        except RuntimeError as e:
+            assert "credit balance" in str(e)
+    finally:
+        llm.LLM_PROVIDER, llm.get_client, llm.DEMO_MODE, llm.LOCALE = saved
+
+
+def test_thinking_setting_is_sent_and_empty_text_is_reported():
+    saved = (llm.LLM_PROVIDER, llm.get_client, llm.CLAUDE_THINKING, llm.DEMO_MODE)
+    llm.LLM_PROVIDER, llm.CLAUDE_THINKING, llm.DEMO_MODE = "anthropic", "disabled", False
+    seen = {}
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            # thinking이 출력 한도를 다 써서 text 블록이 없는 응답
+            return SimpleNamespace(content=[SimpleNamespace(type="thinking")], stop_reason="max_tokens")
+
+    llm.get_client = lambda: SimpleNamespace(messages=_FakeMessages())
+    try:
+        try:
+            llm.complete("x", max_tokens=10)
+        except RuntimeError as e:
+            assert "stop_reason=max_tokens" in str(e)
+        else:
+            raise AssertionError("빈 응답이면 원인을 담은 에러가 나야 함")
+    finally:
+        llm.LLM_PROVIDER, llm.get_client, llm.CLAUDE_THINKING, llm.DEMO_MODE = saved
+
+    assert seen["extra_body"] == {"thinking": {"type": "disabled"}}
