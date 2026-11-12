@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import anthropic
 
+from . import usage
 from .config import ANTHROPIC_API_KEY, HCX_API_KEY, HCX_MODEL, LLM_PROVIDER, SUMMARY_MODEL
 
 _anthropic_client: anthropic.Anthropic | None = None
@@ -59,6 +60,8 @@ def complete(prompt: str, max_tokens: int = 1000) -> str:
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
         )
+        u = getattr(response, "usage", None)
+        _record_call(HCX_MODEL, getattr(u, "prompt_tokens", None), getattr(u, "completion_tokens", None))
         return response.choices[0].message.content
 
     client = get_client()
@@ -67,7 +70,18 @@ def complete(prompt: str, max_tokens: int = 1000) -> str:
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
+    u = getattr(message, "usage", None)
+    _record_call(SUMMARY_MODEL, getattr(u, "input_tokens", None), getattr(u, "output_tokens", None))
     return _text_from_message(message)
+
+
+def _record_call(model: str, input_tokens: int | None, output_tokens: int | None) -> None:
+    """LLM 호출 1건의 토큰 수를 익명 지표로 남긴다 (실측 호출당 비용 계산용).
+
+    모든 LLM 호출이 complete()를 지나가므로, 기능별 코드(lesson_plan/quiz/
+    worksheet)를 건드리지 않고 여기 한 곳에서 비용을 측정할 수 있다.
+    """
+    usage.log_event("llm_call", model=model, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 def _text_from_message(message) -> str:

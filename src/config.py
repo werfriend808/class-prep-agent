@@ -96,6 +96,12 @@ elif not ANTHROPIC_API_KEY:
         "요약/질의분류(실전 1), 수업계획안 생성(실전 2) 모두 실패합니다."
     )
 
+# 익명 사용 지표(src/usage.py) 저장소. Supabase 프로젝트의 URL과 서버용(secret/
+# service_role) 키. 둘 다 비어 있으면 이벤트를 저장하지 않고 로그로만 남긴다.
+# 이 키는 Streamlit 서버에서만 쓰이고 브라우저로 내려가지 않는다.
+SUPABASE_URL = _setting("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = _setting("SUPABASE_KEY", "")
+
 # LLM_PROVIDER=anthropic일 때 쓸 Claude 모델. 공개 데모는 비용 때문에
 # CLAUDE_MODEL=claude-haiku-5-5로 배포하고, 품질이 부족하면 코드 수정 없이
 # secrets에서 모델 ID만 바꾼다. (SUMMARY_MODEL은 예전 이름 — 하위 호환용 별칭)

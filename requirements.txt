@@ -7,3 +7,4 @@ openai>=1.0  # LLM_PROVIDER=clova로 네이버 클로바 스튜디오(OpenAI 호
 google-api-python-client>=2.100  # 종합 프로젝트: Google Docs/Drive REST API
 google-auth-httplib2>=0.2
 google-auth-oauthlib>=1.2  # credentials.json 기반 OAuth Desktop flow, token.json에 갱신 토큰 저장
+httpx>=0.27  # 익명 사용 지표를 Supabase REST(PostgREST)로 기록 (src/usage.py)

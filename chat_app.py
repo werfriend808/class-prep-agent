@@ -43,6 +43,7 @@ import asyncio
 
 import streamlit as st
 
+from src import usage
 from src.config import DEMO_MODE, LOCALE
 from src.conversation import ConversationState, Phase, QuizConversationState
 from src.curriculum import get_provider
@@ -87,6 +88,36 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# --- 익명 사용 지표: 세션 시작 1회 기록 + 매 실행마다 세션 ID를 스레드에 바인딩 ---
+# (llm.complete()가 토큰 수를 남길 때 이 세션 ID를 쓴다 — src/usage.py 참고)
+if "usage_session_id" not in st.session_state:
+    st.session_state.usage_session_id = usage.new_session_id()
+    usage.bind_session(st.session_state.usage_session_id)
+    usage.log_event("session_start")
+usage.bind_session(st.session_state.usage_session_id)
+
+USAGE_NOTICE_US = (
+    "**Anonymous usage stats.** To measure how this demo is used and what it costs, it records "
+    "anonymous events: a session started, a lesson plan/worksheet/quiz was generated or revised, "
+    "a file was downloaded, and token counts per AI call. It does **not** record your name, "
+    "email, IP address, or anything you type. Your messages are sent to Anthropic's Claude API "
+    "to generate content — please don't enter students' personal information."
+)
+USAGE_NOTICE_KO = (
+    "**익명 사용 통계 안내.** 이 데모가 얼마나 쓰이는지와 비용을 측정하기 위해 익명 이벤트만 "
+    "기록합니다: 세션 시작, 계획안·활동지·퀴즈 생성/수정, 파일 다운로드, AI 호출당 토큰 수. "
+    "이름·이메일·IP 주소·입력한 내용은 기록하지 않습니다. 입력한 메시지는 콘텐츠 생성을 위해 "
+    "LLM API로 전송되니 학생 개인정보는 입력하지 마세요."
+)
+
+with st.sidebar:
+    st.markdown(USAGE_NOTICE_US if LOCALE == "us" else USAGE_NOTICE_KO)
+
+
+def _log_download(activity: str) -> None:
+    usage.log_event("download", activity=activity)
+
 
 if LOCALE == "us":
     st.title("💬 AI Lesson Planning Agent")
@@ -199,12 +230,14 @@ def _sync_worksheet_if_needed(conv: ConversationState, old_plan: dict | None, pl
             if conv.worksheet_doc_id and not DEMO_MODE:
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
+        usage.log_event("generation_failed", activity="worksheet")
         st.error(f"학생 활동지 재생성에 실패했어요: {e}")
     except GoogleDocsWriteError as e:
         st.error(f"Google Docs 반영에 실패했어요: {e}")
     except Exception as e:  # noqa: BLE001
         st.error(f"활동지 업데이트 중 문제가 발생했어요: {e}")
     else:
+        usage.log_event("worksheet_revised", activity="worksheet")
         conv.worksheet = new_worksheet
 
 
@@ -227,12 +260,14 @@ def _run_generation(conv: ConversationState, revision_request: str | None = None
                 revision_request=revision_request,
             )
     except LessonPlanError as e:
+        usage.log_event("generation_failed", activity="lesson_plan")
         st.error(str(e))
         if old_plan is not None:
             # 수정 시도가 실패한 거라면 이전 초안으로 되돌아가서 다시 보여준다.
             conv.phase = Phase.DRAFTED
         return False
 
+    usage.log_event("plan_revised" if revision_request else "plan_generated", activity="lesson_plan")
     conv.apply_draft(plan)
     _sync_notion(conv, plan)
     _sync_worksheet_if_needed(conv, old_plan, plan)
@@ -269,12 +304,14 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
             if conv.worksheet_doc_id and not DEMO_MODE:
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
+        usage.log_event("generation_failed", activity="worksheet")
         conv.history.append({"role": "assistant", "content": str(e)})
     except GoogleDocsWriteError as e:
         conv.history.append({"role": "assistant", "content": f"Google Docs 반영에 실패했어요: {e}"})
     except Exception as e:  # noqa: BLE001
         conv.history.append({"role": "assistant", "content": f"활동지 수정 중 문제가 발생했어요: {e}"})
     else:
+        usage.log_event("worksheet_revised", activity="worksheet")
         conv.worksheet = new_worksheet
         done = (
             f"학생 활동지를 수정했어요: [{conv.worksheet_url}]({conv.worksheet_url})"
@@ -348,6 +385,8 @@ def _render_discussion_activity() -> None:
             file_name=f"{_slug(plan['topic'])}-lesson-plan.md",
             mime="text/markdown",
             key="download_plan",
+            on_click=_log_download,
+            args=("lesson_plan",),
         )
         if DEMO_MODE:
             st.info("데모 모드에서는 Notion에 저장하지 않아요. 위 버튼으로 내려받아 사용하세요.")
@@ -374,12 +413,14 @@ def _render_discussion_activity() -> None:
                                 worksheet_to_text(worksheet_data),
                             )
                 except WorksheetError as e:
+                    usage.log_event("generation_failed", activity="worksheet")
                     st.error(str(e))
                 except GoogleDocsWriteError as e:
                     st.error(str(e))
                 except Exception as e:  # noqa: BLE001
                     st.error(f"활동지 생성 중 문제가 발생했어요: {e}")
                 else:
+                    usage.log_event("worksheet_generated", activity="worksheet")
                     conv.worksheet = worksheet_data
                     if doc:
                         conv.worksheet_doc_id = doc["doc_id"]
@@ -395,6 +436,8 @@ def _render_discussion_activity() -> None:
                     file_name=f"{_slug(plan['topic'])}-worksheet.txt",
                     mime="text/plain",
                     key="download_worksheet",
+                    on_click=_log_download,
+                    args=("worksheet",),
                 )
             with st.expander("학생 활동지 미리보기", expanded=DEMO_MODE):
                 for key, label in WORKSHEET_SECTION_TITLES.items():
@@ -437,12 +480,14 @@ def _sync_worksheet_if_needed_us(conv: ConversationState, old_plan: dict | None,
             if conv.worksheet_doc_id and not DEMO_MODE:
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
+        usage.log_event("generation_failed", activity="worksheet")
         st.error(f"Failed to regenerate the student worksheet: {e}")
     except GoogleDocsWriteError as e:
         st.error(f"Failed to update Google Docs: {e}")
     except Exception as e:  # noqa: BLE001
         st.error(f"Something went wrong while updating the worksheet: {e}")
     else:
+        usage.log_event("worksheet_revised", activity="worksheet")
         conv.worksheet = new_worksheet
 
 
@@ -464,11 +509,13 @@ def _run_generation_us(conv: ConversationState, revision_request: str | None = N
                 locale="us",
             )
     except LessonPlanError as e:
+        usage.log_event("generation_failed", activity="lesson_plan")
         st.error(str(e))
         if conv.draft is not None:
             conv.phase = Phase.DRAFTED
         return False
 
+    usage.log_event("plan_revised" if revision_request else "plan_generated", activity="lesson_plan")
     conv.apply_draft(plan)
     _sync_notion(conv, plan)
     _sync_worksheet_if_needed_us(conv, old_plan, plan)
@@ -496,12 +543,14 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
             if conv.worksheet_doc_id and not DEMO_MODE:
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
+        usage.log_event("generation_failed", activity="worksheet")
         conv.history.append({"role": "assistant", "content": str(e)})
     except GoogleDocsWriteError as e:
         conv.history.append({"role": "assistant", "content": f"Failed to update Google Docs: {e}"})
     except Exception as e:  # noqa: BLE001
         conv.history.append({"role": "assistant", "content": f"Something went wrong while revising the worksheet: {e}"})
     else:
+        usage.log_event("worksheet_revised", activity="worksheet")
         conv.worksheet = new_worksheet
         done = (
             f"Updated the student worksheet: [{conv.worksheet_url}]({conv.worksheet_url})"
@@ -574,6 +623,8 @@ def _render_discussion_activity_us() -> None:
             file_name=f"{_slug(plan['topic'])}-lesson-plan.md",
             mime="text/markdown",
             key="download_plan_us",
+            on_click=_log_download,
+            args=("lesson_plan",),
         )
         if DEMO_MODE:
             st.info("Demo mode doesn't save to Notion — use the download button to keep your plan.")
@@ -600,12 +651,14 @@ def _render_discussion_activity_us() -> None:
                                 worksheet_to_text(worksheet_data),
                             )
                 except WorksheetError as e:
+                    usage.log_event("generation_failed", activity="worksheet")
                     st.error(str(e))
                 except GoogleDocsWriteError as e:
                     st.error(str(e))
                 except Exception as e:  # noqa: BLE001
                     st.error(f"Something went wrong while generating the worksheet: {e}")
                 else:
+                    usage.log_event("worksheet_generated", activity="worksheet")
                     conv.worksheet = worksheet_data
                     if doc:
                         conv.worksheet_doc_id = doc["doc_id"]
@@ -621,6 +674,8 @@ def _render_discussion_activity_us() -> None:
                     file_name=f"{_slug(plan['topic'])}-worksheet.txt",
                     mime="text/plain",
                     key="download_worksheet_us",
+                    on_click=_log_download,
+                    args=("worksheet",),
                 )
             with st.expander("Preview student worksheet", expanded=DEMO_MODE):
                 for key, label in WORKSHEET_SECTION_TITLES_US.items():
@@ -685,11 +740,13 @@ def _run_quiz_generation(quiz_conv: QuizConversationState, revision_request: str
                 current_draft=old_draft,
             )
     except QuizError as e:
+        usage.log_event("generation_failed", activity="quiz")
         st.error(str(e))
         if old_draft is not None:
             quiz_conv.phase = Phase.DRAFTED
         return False
 
+    usage.log_event("quiz_revised" if revision_request else "quiz_generated", activity="quiz")
     quiz_conv.apply_draft(result)
     _sync_form(quiz_conv, f"{result['topic']} 퀴즈", result["questions"])
     return True
@@ -749,6 +806,8 @@ def _render_quiz_activity() -> None:
             file_name=f"{_slug(quiz_conv.draft.get('topic', ''))}-quiz.md",
             mime="text/markdown",
             key="download_quiz",
+            on_click=_log_download,
+            args=("quiz",),
         )
         if DEMO_MODE:
             st.info("데모 모드에서는 Google Forms를 만들지 않아요. 위 버튼으로 문항과 정답을 내려받을 수 있어요.")
@@ -812,11 +871,13 @@ def _run_quiz_generation_us(quiz_conv: QuizConversationState, revision_request: 
                 locale="us",
             )
     except QuizError as e:
+        usage.log_event("generation_failed", activity="quiz")
         st.error(str(e))
         if old_draft is not None:
             quiz_conv.phase = Phase.DRAFTED
         return False
 
+    usage.log_event("quiz_revised" if revision_request else "quiz_generated", activity="quiz")
     quiz_conv.apply_draft(result)
     _sync_form_us(quiz_conv, f"{result['topic']} Quiz", result["questions"])
     return True
@@ -878,6 +939,8 @@ def _render_quiz_activity_us() -> None:
             file_name=f"{_slug(quiz_conv.draft.get('topic', ''))}-quiz.md",
             mime="text/markdown",
             key="download_quiz_us",
+            on_click=_log_download,
+            args=("quiz",),
         )
         if DEMO_MODE:
             st.info("Demo mode doesn't create a Google Form — download the questions and answer key above.")
