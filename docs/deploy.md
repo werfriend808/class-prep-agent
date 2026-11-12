@@ -113,6 +113,14 @@ where not internal and activity is not null
 group by activity;
 ```
 
+## A second, Korean instance
+
+Create another Streamlit app from the same repo and branch with the same
+secrets, except `LOCALE = "ko"` (Korean UI + NCIC curriculum, all subjects)
+and, if you have one, a Korean `FEEDBACK_URL`. Both instances can share the
+Supabase project: events carry a `locale` column, and the daily LLM-call limit
+is counted across both, so there is still one cost ceiling.
+
 ## Running with the full integrations (local)
 
 Put `NOTION_API_KEY` (and the rest of `.env.example`) in `.env` and leave
