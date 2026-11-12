@@ -43,15 +43,15 @@ import asyncio
 
 import streamlit as st
 
-from src.config import LOCALE
+from src.config import DEMO_MODE, LOCALE
 from src.conversation import ConversationState, Phase, QuizConversationState
 from src.curriculum import get_provider
 from src.edit_propagation import classify_edit_target, worksheet_needs_update
 from src.forms_writer import FormsWriteError, create_quiz_form, replace_quiz_questions
 from src.google_docs_writer import GoogleDocsWriteError, create_and_write_doc, replace_doc_body
 from src.lesson_plan import LessonPlanError, generate_lesson_plan
-from src.notion_writer import NotionWriteError, save_lesson_plan_to_notion, update_lesson_plan_in_notion
-from src.quiz import QuizError, generate_quiz
+from src.notion_writer import NotionWriteError, plan_to_markdown, save_lesson_plan_to_notion, update_lesson_plan_in_notion
+from src.quiz import QuizError, generate_quiz, quiz_to_markdown
 from src.worksheet import WorksheetError, generate_worksheet, worksheet_to_text
 
 st.set_page_config(
@@ -144,12 +144,36 @@ WORKSHEET_SECTION_TITLES_US = {
 
 
 # ============================================================
+# 데모 모드 공용 헬퍼
+# ============================================================
+#
+# 데모 모드(config.DEMO_MODE)에선 Notion/Google Docs/Forms 쓰기를 전부 건너뛰고,
+# 결과는 화면 + 다운로드 버튼으로만 준다. 생성/수정/편집 전파 로직(대화 상태
+# 머신, worksheet_needs_update 등)은 그대로 두고 "외부에 쓰는 마지막 단계"만
+# 끄는 방식이라, 연동 모드와 데모 모드가 같은 코드 경로를 탄다.
+#
+# 활동지 "존재 여부"는 예전엔 conv.worksheet_doc_id(구글 문서 ID)로 판단했는데,
+# 데모 모드에선 문서가 없으므로 생성된 활동지 내용(conv.worksheet) 기준으로 바꿨다.
+
+
+def _has_worksheet(conv: ConversationState) -> bool:
+    return conv.worksheet is not None or bool(conv.worksheet_doc_id)
+
+
+def _slug(text: str) -> str:
+    keep = [c if c.isalnum() else "-" for c in (text or "").strip().lower()]
+    return "-".join(filter(None, "".join(keep).split("-")))[:40] or "download"
+
+
+# ============================================================
 # 토의·토론 Activity
 # ============================================================
 
 
 def _sync_notion(conv: ConversationState, plan: dict) -> None:
     """계획안을 Notion에 반영한다. 처음이면 새 페이지, 이미 있으면 같은 페이지를 업데이트한다."""
+    if DEMO_MODE:
+        return
     try:
         with st.spinner("Notion에 반영하는 중..."):
             if conv.notion_page_id:
@@ -167,12 +191,13 @@ def _sync_notion(conv: ConversationState, plan: dict) -> None:
 
 def _sync_worksheet_if_needed(conv: ConversationState, old_plan: dict | None, plan: dict) -> None:
     """활동지가 이미 있고 이번 수정이 활동지에도 영향을 준다면, 자동으로 다시 만들어 Google Docs에 반영한다."""
-    if not conv.worksheet_doc_id or not worksheet_needs_update(old_plan, plan):
+    if not _has_worksheet(conv) or not worksheet_needs_update(old_plan, plan):
         return
     try:
         with st.spinner("계획안 변경 내용을 학생 활동지에도 반영하는 중..."):
             new_worksheet = generate_worksheet(plan)
-            replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
+            if conv.worksheet_doc_id and not DEMO_MODE:
+                replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         st.error(f"학생 활동지 재생성에 실패했어요: {e}")
     except GoogleDocsWriteError as e:
@@ -228,7 +253,7 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
     conv.phase = Phase.DRAFTED
     conv.slots.pop("revision_request", None)
 
-    if not conv.worksheet_doc_id:
+    if not _has_worksheet(conv):
         # 예외 상황: 활동지를 아직 안 만들었는데 활동지 수정을 요청한 경우.
         conv.history.append(
             {
@@ -241,7 +266,8 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
     try:
         with st.spinner("학생 활동지를 수정하는 중..."):
             new_worksheet = generate_worksheet(conv.draft, revision_request=revision_request)
-            replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
+            if conv.worksheet_doc_id and not DEMO_MODE:
+                replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         conv.history.append({"role": "assistant", "content": str(e)})
     except GoogleDocsWriteError as e:
@@ -250,9 +276,12 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
         conv.history.append({"role": "assistant", "content": f"활동지 수정 중 문제가 발생했어요: {e}"})
     else:
         conv.worksheet = new_worksheet
-        conv.history.append(
-            {"role": "assistant", "content": f"학생 활동지를 수정했어요: [{conv.worksheet_url}]({conv.worksheet_url})"}
+        done = (
+            f"학생 활동지를 수정했어요: [{conv.worksheet_url}]({conv.worksheet_url})"
+            if conv.worksheet_url
+            else "학생 활동지를 수정했어요. 아래 미리보기에서 확인하세요."
         )
+        conv.history.append({"role": "assistant", "content": done})
     return True
 
 
@@ -291,7 +320,7 @@ def _render_discussion_activity() -> None:
     # --- REVISING: 계획안 수정인지 활동지 수정인지 구분해서 처리 ---
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        target = classify_edit_target(revision_request, has_worksheet=bool(conv.worksheet_doc_id))
+        target = classify_edit_target(revision_request, has_worksheet=_has_worksheet(conv))
         if target == "worksheet":
             if _run_worksheet_revision(conv, revision_request):
                 st.rerun()
@@ -313,22 +342,37 @@ def _render_discussion_activity() -> None:
                 for ref in plan["ncic_references"]:
                     st.write(f"- {ref}")
 
-        if conv.notion_url:
+        st.download_button(
+            "계획안 다운로드 (.md)",
+            plan_to_markdown(plan),
+            file_name=f"{_slug(plan['topic'])}-lesson-plan.md",
+            mime="text/markdown",
+            key="download_plan",
+        )
+        if DEMO_MODE:
+            st.info("데모 모드에서는 Notion에 저장하지 않아요. 위 버튼으로 내려받아 사용하세요.")
+        elif conv.notion_url:
             st.success(f"Notion에 반영됨: [{conv.notion_url}]({conv.notion_url})")
         else:
             st.warning("아직 Notion에 반영되지 않았어요. 위쪽 오류 메시지를 확인해주세요.")
 
         st.divider()
-        if not conv.worksheet_doc_id:
-            st.caption("학생들이 수업 중 직접 쓸 활동지도 만들어서 Google Docs에 저장할 수 있어요.")
+        if not _has_worksheet(conv):
+            st.caption(
+                "학생들이 수업 중 직접 쓸 활동지도 만들 수 있어요."
+                if DEMO_MODE
+                else "학생들이 수업 중 직접 쓸 활동지도 만들어서 Google Docs에 저장할 수 있어요."
+            )
             if st.button("학생 활동지도 만들기", key="make_worksheet"):
                 try:
                     with st.spinner("학생 활동지를 만드는 중..."):
                         worksheet_data = generate_worksheet(plan)
-                        doc = create_and_write_doc(
-                            f"{plan['topic']} 학생 활동지",
-                            worksheet_to_text(worksheet_data),
-                        )
+                        doc = None
+                        if not DEMO_MODE:
+                            doc = create_and_write_doc(
+                                f"{plan['topic']} 학생 활동지",
+                                worksheet_to_text(worksheet_data),
+                            )
                 except WorksheetError as e:
                     st.error(str(e))
                 except GoogleDocsWriteError as e:
@@ -337,12 +381,22 @@ def _render_discussion_activity() -> None:
                     st.error(f"활동지 생성 중 문제가 발생했어요: {e}")
                 else:
                     conv.worksheet = worksheet_data
-                    conv.worksheet_doc_id = doc["doc_id"]
-                    conv.worksheet_url = doc["url"]
+                    if doc:
+                        conv.worksheet_doc_id = doc["doc_id"]
+                        conv.worksheet_url = doc["url"]
                     st.rerun()
         else:
-            st.success(f"학생 활동지: [{conv.worksheet_url}]({conv.worksheet_url})")
-            with st.expander("학생 활동지 미리보기", expanded=False):
+            if conv.worksheet_url:
+                st.success(f"학생 활동지: [{conv.worksheet_url}]({conv.worksheet_url})")
+            if conv.worksheet:
+                st.download_button(
+                    "활동지 다운로드 (.txt)",
+                    worksheet_to_text(conv.worksheet),
+                    file_name=f"{_slug(plan['topic'])}-worksheet.txt",
+                    mime="text/plain",
+                    key="download_worksheet",
+                )
+            with st.expander("학생 활동지 미리보기", expanded=DEMO_MODE):
                 for key, label in WORKSHEET_SECTION_TITLES.items():
                     st.write(f"**{label}**")
                     st.write(conv.worksheet.get(key, "") if conv.worksheet else "")
@@ -375,12 +429,13 @@ def _render_discussion_activity() -> None:
 
 def _sync_worksheet_if_needed_us(conv: ConversationState, old_plan: dict | None, plan: dict) -> None:
     """_sync_worksheet_if_needed()의 영어 버전 (2026-09-18, worksheet.py 영어 번역 완료)."""
-    if not conv.worksheet_doc_id or not worksheet_needs_update(old_plan, plan, locale="us"):
+    if not _has_worksheet(conv) or not worksheet_needs_update(old_plan, plan, locale="us"):
         return
     try:
         with st.spinner("Updating the student worksheet to match the revised lesson plan..."):
             new_worksheet = generate_worksheet(plan, locale="us")
-            replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
+            if conv.worksheet_doc_id and not DEMO_MODE:
+                replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         st.error(f"Failed to regenerate the student worksheet: {e}")
     except GoogleDocsWriteError as e:
@@ -425,7 +480,7 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
     conv.phase = Phase.DRAFTED
     conv.slots.pop("revision_request", None)
 
-    if not conv.worksheet_doc_id:
+    if not _has_worksheet(conv):
         conv.history.append(
             {
                 "role": "assistant",
@@ -438,7 +493,8 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
     try:
         with st.spinner("Revising the student worksheet..."):
             new_worksheet = generate_worksheet(conv.draft, revision_request=revision_request, locale="us")
-            replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
+            if conv.worksheet_doc_id and not DEMO_MODE:
+                replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         conv.history.append({"role": "assistant", "content": str(e)})
     except GoogleDocsWriteError as e:
@@ -447,9 +503,12 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
         conv.history.append({"role": "assistant", "content": f"Something went wrong while revising the worksheet: {e}"})
     else:
         conv.worksheet = new_worksheet
-        conv.history.append(
-            {"role": "assistant", "content": f"Updated the student worksheet: [{conv.worksheet_url}]({conv.worksheet_url})"}
+        done = (
+            f"Updated the student worksheet: [{conv.worksheet_url}]({conv.worksheet_url})"
+            if conv.worksheet_url
+            else "Updated the student worksheet — see the preview below."
         )
+        conv.history.append({"role": "assistant", "content": done})
     return True
 
 
@@ -463,9 +522,10 @@ def _render_discussion_activity_us() -> None:
 
     st.caption(
         f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and topic, "
-        "and I'll put together a discussion-based lesson plan grounded in Common Core standards and save it "
-        "to Notion. After it's generated, you can keep asking for revisions in the chat, and you can also "
-        "generate a student worksheet saved to Google Docs."
+        "and I'll put together a discussion-based lesson plan grounded in Common Core standards"
+        + (". " if DEMO_MODE else " and save it to Notion. ")
+        + "After it's generated, you can keep asking for revisions in the chat, and you can also "
+        "generate a matching student worksheet."
     )
 
     for msg in conv.history:
@@ -487,7 +547,7 @@ def _render_discussion_activity_us() -> None:
 
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        target = classify_edit_target(revision_request, has_worksheet=bool(conv.worksheet_doc_id), locale="us")
+        target = classify_edit_target(revision_request, has_worksheet=_has_worksheet(conv), locale="us")
         if target == "worksheet":
             if _run_worksheet_revision_us(conv, revision_request):
                 st.rerun()
@@ -508,22 +568,37 @@ def _render_discussion_activity_us() -> None:
                 for ref in plan["standards_references"]:
                     st.write(f"- {ref}")
 
-        if conv.notion_url:
+        st.download_button(
+            "Download lesson plan (.md)",
+            plan_to_markdown(plan),
+            file_name=f"{_slug(plan['topic'])}-lesson-plan.md",
+            mime="text/markdown",
+            key="download_plan_us",
+        )
+        if DEMO_MODE:
+            st.info("Demo mode doesn't save to Notion — use the download button to keep your plan.")
+        elif conv.notion_url:
             st.success(f"Saved to Notion: [{conv.notion_url}]({conv.notion_url})")
         else:
             st.warning("Not yet saved to Notion — check the error message above.")
 
         st.divider()
-        if not conv.worksheet_doc_id:
-            st.caption("You can also generate a student worksheet for students to fill out during class, saved to Google Docs.")
+        if not _has_worksheet(conv):
+            st.caption(
+                "You can also generate a student worksheet for students to fill out during class."
+                if DEMO_MODE
+                else "You can also generate a student worksheet for students to fill out during class, saved to Google Docs."
+            )
             if st.button("Also make a student worksheet", key="make_worksheet_us"):
                 try:
                     with st.spinner("Generating the student worksheet..."):
                         worksheet_data = generate_worksheet(plan, locale="us")
-                        doc = create_and_write_doc(
-                            f"{plan['topic']} Student Worksheet",
-                            worksheet_to_text(worksheet_data),
-                        )
+                        doc = None
+                        if not DEMO_MODE:
+                            doc = create_and_write_doc(
+                                f"{plan['topic']} Student Worksheet",
+                                worksheet_to_text(worksheet_data),
+                            )
                 except WorksheetError as e:
                     st.error(str(e))
                 except GoogleDocsWriteError as e:
@@ -532,12 +607,22 @@ def _render_discussion_activity_us() -> None:
                     st.error(f"Something went wrong while generating the worksheet: {e}")
                 else:
                     conv.worksheet = worksheet_data
-                    conv.worksheet_doc_id = doc["doc_id"]
-                    conv.worksheet_url = doc["url"]
+                    if doc:
+                        conv.worksheet_doc_id = doc["doc_id"]
+                        conv.worksheet_url = doc["url"]
                     st.rerun()
         else:
-            st.success(f"Student worksheet: [{conv.worksheet_url}]({conv.worksheet_url})")
-            with st.expander("Preview student worksheet", expanded=False):
+            if conv.worksheet_url:
+                st.success(f"Student worksheet: [{conv.worksheet_url}]({conv.worksheet_url})")
+            if conv.worksheet:
+                st.download_button(
+                    "Download worksheet (.txt)",
+                    worksheet_to_text(conv.worksheet),
+                    file_name=f"{_slug(plan['topic'])}-worksheet.txt",
+                    mime="text/plain",
+                    key="download_worksheet_us",
+                )
+            with st.expander("Preview student worksheet", expanded=DEMO_MODE):
                 for key, label in WORKSHEET_SECTION_TITLES_US.items():
                     st.write(f"**{label}**")
                     st.write(conv.worksheet.get(key, "") if conv.worksheet else "")
@@ -563,6 +648,8 @@ def _render_discussion_activity_us() -> None:
 
 def _sync_form(quiz_conv: QuizConversationState, title: str, questions: list[dict]) -> None:
     """퀴즈 문항을 Google Forms에 반영한다. 폼이 없으면 새로 만들고(+게시), 있으면 문항을 통째로 교체한다."""
+    if DEMO_MODE:
+        return
     try:
         if quiz_conv.form_id:
             with st.spinner("Google Forms 문항을 수정하는 중..."):
@@ -656,7 +743,16 @@ def _render_quiz_activity() -> None:
                 if q.get("explanation"):
                     st.caption(f"해설: {q['explanation']}")
 
-        if quiz_conv.responder_url:
+        st.download_button(
+            "퀴즈 다운로드 (.md)",
+            quiz_to_markdown(quiz_conv.draft),
+            file_name=f"{_slug(quiz_conv.draft.get('topic', ''))}-quiz.md",
+            mime="text/markdown",
+            key="download_quiz",
+        )
+        if DEMO_MODE:
+            st.info("데모 모드에서는 Google Forms를 만들지 않아요. 위 버튼으로 문항과 정답을 내려받을 수 있어요.")
+        elif quiz_conv.responder_url:
             st.success(f"Google Forms에 반영됨(응답용 링크): [{quiz_conv.responder_url}]({quiz_conv.responder_url})")
             st.caption(f"편집 화면: {quiz_conv.edit_url}")
         else:
@@ -682,7 +778,9 @@ def _render_quiz_activity() -> None:
 
 
 def _sync_form_us(quiz_conv: QuizConversationState, title: str, questions: list[dict]) -> None:
-    """_sync_form()\uc758 English \ubc84\uc804."""
+    """_sync_form()의 English 버전."""
+    if DEMO_MODE:
+        return
     try:
         if quiz_conv.form_id:
             with st.spinner("Updating the Google Forms quiz..."):
@@ -700,7 +798,7 @@ def _sync_form_us(quiz_conv: QuizConversationState, title: str, questions: list[
 
 
 def _run_quiz_generation_us(quiz_conv: QuizConversationState, revision_request: str | None = None) -> bool:
-    """_run_quiz_generation()\uc758 English \ubc84\uc804."""
+    """_run_quiz_generation()의 English 버전."""
     slots = quiz_conv.slots
     old_draft = quiz_conv.draft
     try:
@@ -735,8 +833,9 @@ def _render_quiz_activity_us() -> None:
     st.caption(
         f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and the "
         "unit/topic you want to check, and I'll build a multiple-choice quiz (4 options by default, "
-        "adjustable via chat) and save it to Google Forms with auto-grading. You can keep asking for "
-        "revisions in the chat after it's generated."
+        "adjustable via chat)"
+        + (" with an answer key you can download. " if DEMO_MODE else " and save it to Google Forms with auto-grading. ")
+        + "You can keep asking for revisions in the chat after it's generated."
     )
 
     for msg in quiz_conv.history:
@@ -773,7 +872,16 @@ def _render_quiz_activity_us() -> None:
                 if q.get("explanation"):
                     st.caption(f"Explanation: {q['explanation']}")
 
-        if quiz_conv.responder_url:
+        st.download_button(
+            "Download quiz (.md)",
+            quiz_to_markdown(quiz_conv.draft),
+            file_name=f"{_slug(quiz_conv.draft.get('topic', ''))}-quiz.md",
+            mime="text/markdown",
+            key="download_quiz_us",
+        )
+        if DEMO_MODE:
+            st.info("Demo mode doesn't create a Google Form — download the questions and answer key above.")
+        elif quiz_conv.responder_url:
             st.success(f"Saved to Google Forms (responder link): [{quiz_conv.responder_url}]({quiz_conv.responder_url})")
             st.caption(f"Edit view: {quiz_conv.edit_url}")
         else:

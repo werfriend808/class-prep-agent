@@ -693,3 +693,38 @@ def _parse_quiz_json(raw_text: str, locale: str = "ko") -> dict:
         )
 
     return {"questions": validated}
+
+
+def quiz_to_markdown(draft: dict) -> str:
+    """generate_quiz() 결과를 다운로드용 마크다운으로 변환한다.
+
+    데모 모드(Google Forms 연동 없음)에서 사용자가 퀴즈를 가져갈 수 있는 유일한
+    경로라서, 정답/해설은 문항 바로 아래가 아니라 맨 끝 "Answer key"/"정답"
+    섹션에 모아 둔다 — 문항 부분만 그대로 복사해 학생에게 나눠줄 수 있게.
+    """
+    is_us = draft.get("locale") == "us"
+    letters = "ABCDEFGH"
+    title = f"{draft.get('topic', '')} — Quiz" if is_us else f"{draft.get('topic', '')} 퀴즈"
+    meta = (
+        f"**Subject**: {draft.get('subject', '')}  |  **Grade**: {draft.get('grade', '')}"
+        if is_us
+        else f"**과목**: {draft.get('subject', '')}  |  **대상**: {draft.get('grade', '')}"
+    )
+    lines = [f"# {title}", "", meta, ""]
+    questions = draft.get("questions", [])
+    for i, q in enumerate(questions, start=1):
+        lines.append(f"{i}. {q.get('question', '')}")
+        for j, option in enumerate(q.get("options", [])):
+            lines.append(f"   - {letters[j] if j < len(letters) else j + 1}. {option}")
+        lines.append("")
+
+    lines.append("## Answer key" if is_us else "## 정답 및 해설")
+    for i, q in enumerate(questions, start=1):
+        idx = q.get("correct_index", 0)
+        letter = letters[idx] if 0 <= idx < len(letters) else str(idx + 1)
+        line = f"{i}. {letter}"
+        if q.get("explanation"):
+            line += f" — {q['explanation']}"
+        lines.append(line)
+    lines.append("")
+    return "\n".join(lines)
