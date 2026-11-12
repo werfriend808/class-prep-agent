@@ -18,7 +18,7 @@ from __future__ import annotations
 import anthropic
 
 from . import usage
-from .config import ANTHROPIC_API_KEY, HCX_API_KEY, HCX_MODEL, LLM_PROVIDER, SUMMARY_MODEL
+from .config import ANTHROPIC_API_KEY, DEMO_MODE, HCX_API_KEY, HCX_MODEL, LLM_PROVIDER, LOCALE, SUMMARY_MODEL
 
 _anthropic_client: anthropic.Anthropic | None = None
 _clova_client = None  # openai.OpenAI, 지연 import
@@ -54,6 +54,29 @@ def complete(prompt: str, max_tokens: int = 1000) -> str:
     lesson_plan.py가 이 함수만 쓰고 provider를 신경 쓰지 않도록 하기 위한 어댑터.
     """
     usage.check_quota()  # 공개 데모 비용 상한 — 초과면 QuotaExceededError (usage.py)
+    try:
+        return _complete_raw(prompt, max_tokens)
+    except Exception as e:  # noqa: BLE001
+        if not DEMO_MODE:
+            raise  # 로컬 개발에선 원본 에러를 그대로 보여주는 게 디버깅에 낫다
+        # 공개 데모: 원본 에러(request_id, 결제 안내 등)는 서버 로그에만 남기고
+        # 사용자에겐 일반 안내만 보여준다. 크레딧 부족 같은 운영 문제가 방문자
+        # 화면에 그대로 노출되던 걸 실제로 확인하고(2026-11-12) 바꿨다.
+        print(f"[llm] provider error: {type(e).__name__}: {e}")
+        raise LLMServiceError(_unavailable_message()) from e
+
+
+class LLMServiceError(RuntimeError):
+    """데모 모드에서 provider 에러를 사용자용 문구로 감싼 예외."""
+
+
+def _unavailable_message() -> str:
+    if LOCALE == "us":
+        return "The AI service is temporarily unavailable. Please try again in a few minutes."
+    return "AI 서비스를 일시적으로 사용할 수 없어요. 잠시 후 다시 시도해주세요."
+
+
+def _complete_raw(prompt: str, max_tokens: int) -> str:
     if LLM_PROVIDER == "clova":
         client = _get_clova_client()
         response = client.chat.completions.create(

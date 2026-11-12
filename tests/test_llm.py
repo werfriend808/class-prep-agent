@@ -106,3 +106,31 @@ def test_complete_skips_non_text_blocks():
         llm.get_client = original_get_client
 
     assert result == '{"a": 1}'
+
+
+def test_demo_mode_hides_provider_error_details():
+    """데모 모드에선 크레딧 부족 같은 원본 에러가 사용자 문구로 바뀌어야 한다."""
+    saved = (llm.LLM_PROVIDER, llm.get_client, llm.DEMO_MODE, llm.LOCALE)
+    llm.LLM_PROVIDER, llm.DEMO_MODE, llm.LOCALE = "anthropic", True, "us"
+
+    class _FakeMessages:
+        def create(self, **kwargs):
+            raise RuntimeError("Error code: 400 - credit balance is too low, request_id=req_123")
+
+    llm.get_client = lambda: SimpleNamespace(messages=_FakeMessages())
+    try:
+        try:
+            llm.complete("x", max_tokens=10)
+        except llm.LLMServiceError as e:
+            assert "temporarily unavailable" in str(e)
+            assert "req_123" not in str(e) and "credit" not in str(e)
+        else:
+            raise AssertionError("LLMServiceError가 나야 함")
+
+        llm.DEMO_MODE = False  # 로컬 개발: 원본 그대로
+        try:
+            llm.complete("x", max_tokens=10)
+        except RuntimeError as e:
+            assert "credit balance" in str(e)
+    finally:
+        llm.LLM_PROVIDER, llm.get_client, llm.DEMO_MODE, llm.LOCALE = saved
