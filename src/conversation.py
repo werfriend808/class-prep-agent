@@ -40,6 +40,7 @@ class Phase(str, Enum):
     READY = "ready"
     DRAFTED = "drafted"
     REVISING = "revising"
+    CLARIFYING = "clarifying"  # 2026-11-13: 과목·학년·주제가 안 맞아서 되묻는 중
 
 
 # 구체적인 과목명을 먼저 검사해야 "사회"가 "통합사회"/"한국사"를 삼키지 않는다.
@@ -160,8 +161,92 @@ def extract_grade_us(text: str) -> str | None:
     return "9"  # "high school" 단독 언급.
 
 
+# --- 정합성 판정 후 되묻기 (2026-11-13) ---------------------------------------
+# src/topic_check.py가 "과목·학년·주제가 안 맞는다"고 판정하면 chat_app이
+# request_clarification()으로 CLARIFYING 단계에 넣는다. 판정 자체(성취기준 검색 +
+# 필요시 LLM)는 이 파일 밖에서 한다 — 상태 클래스는 지금처럼 LLM 없이 규칙만으로
+# 동작해야 대화 흐름 전체를 크레딧 없이 테스트할 수 있기 때문이다.
+#
+# ConversationState/QuizConversationState는 일부러 공통 베이스 클래스 없이 따로
+# 두고 있지만(QuizConversationState docstring 참고), 이 되묻기 동작은 두 Activity에
+# 완전히 똑같이 새로 필요한 것이라 같은 코드를 두 번 쓰는 대신 믹스인 하나로 공유한다.
+# 기존 메서드는 건드리지 않고 CLARIFYING 분기만 추가한다.
+_ACCEPT_AS_IS_RE = re.compile(r"그대로|이대로|as[\s-]+is|go ahead|proceed anyway", re.IGNORECASE)
+_SUBJECT_ONLY_TAIL = r"\s*(과목)?\s*(으로|로)?\s*(?:(바꿔|바꿀게|해|change)\S*)?\s*[.!]?\s*"
+
+
+def _subject_only(message: str, is_us: bool) -> str | None:
+    """메시지가 "국어", "국어로 바꿔줘"처럼 과목만 말한 경우에만 그 과목을 반환한다.
+
+    extract_subject()는 문장 어디에 과목명이 있어도 잡기 때문에(예: 과학 수업 주제
+    "사회적 거리두기" 안의 "사회") 되묻기 단계에서 그대로 쓰면 새 주제를 과목 변경으로
+    오해한다. 그래서 여기서는 과목명으로 시작하고 뒤에 조사/동사만 붙은 짧은 메시지만
+    과목 변경으로 본다.
+    """
+    subject = extract_subject_us(message) if is_us else extract_subject(message)
+    if subject is None:
+        return None
+    if re.fullmatch(rf"\s*{re.escape(subject)}{_SUBJECT_ONLY_TAIL}", message, re.IGNORECASE):
+        return subject
+    return None
+
+
+class _ClarificationMixin:
+    """CLARIFYING 단계 처리. phase/slots/locale/history/topic_checked 필드를 쓴다."""
+
+    def request_clarification(self, message: str, check: object | None = None) -> None:
+        """판정 결과 되묻기가 필요할 때 chat_app이 부른다. message는 topic_check.format_message()."""
+        self.phase = Phase.CLARIFYING
+        self.topic_check = check
+        self._record("assistant", message)
+
+    def mark_topic_checked(self, check: object | None = None) -> None:
+        """판정을 통과했다(또는 사용자가 그대로 진행을 골랐다) — 다시 판정하지 않는다."""
+        self.topic_checked = True
+        self.topic_check = check
+
+    def accept_as_is(self) -> str:
+        self.mark_topic_checked(self.topic_check)
+        self.phase = Phase.READY
+        reply = (
+            "OK — I'll go ahead with what you entered."
+            if self.locale == "us"
+            else "알겠어요. 입력하신 그대로 만들어볼게요."
+        )
+        self._record("assistant", reply)
+        return reply
+
+    def change_slot(self, slot: str, value: str) -> str:
+        """학년/과목/주제 하나를 바꾸고 다시 판정받도록 READY로 돌린다."""
+        self.slots[slot] = value
+        self.topic_checked = False
+        self.topic_check = None
+        return self._advance_and_get_reply()
+
+    def _handle_clarification(self, message: str) -> str:
+        is_us = self.locale == "us"
+        text = message.strip()
+        if not text:
+            reply = (
+                "Please type a grade, a different topic, or 'use as is'."
+                if is_us
+                else "학년이나 과목, 또는 다른 주제를 적어주세요. 그대로 만들려면 '그대로 만들기'라고 적어주세요."
+            )
+            self._record("assistant", reply)
+            return reply
+        if _ACCEPT_AS_IS_RE.search(text):
+            return self.accept_as_is()
+        grade = extract_grade_us(text) if is_us else extract_grade(text)
+        if grade is not None:
+            return self.change_slot("grade", grade)
+        subject = _subject_only(text, is_us)
+        if subject is not None:
+            return self.change_slot("subject", subject)
+        return self.change_slot("topic", text)
+
+
 @dataclass
-class ConversationState:
+class ConversationState(_ClarificationMixin):
     locale: str = "ko"  # "ko"(기본, NCIC) | "us"(Common Core Math, Phase 3)
     phase: Phase = Phase.COLLECTING
     slots: dict = field(default_factory=dict)
@@ -177,6 +262,9 @@ class ConversationState:
     worksheet: dict | None = None
     worksheet_doc_id: str | None = None
     worksheet_url: str | None = None
+    # 2026-11-13: 과목·학년·주제 정합성 판정 (src/topic_check.py, _ClarificationMixin 참고)
+    topic_checked: bool = False
+    topic_check: object | None = None
 
     def missing_slots(self) -> list[str]:
         return [s for s in REQUIRED_SLOTS if s not in self.slots]
@@ -251,6 +339,9 @@ class ConversationState:
 
             return self._advance_and_get_reply()
 
+        if self.phase == Phase.CLARIFYING:
+            return self._handle_clarification(message)
+
         if self.phase in (Phase.DRAFTED,):
             # 초안을 본 뒤 사용자가 뭔가 말하면 "수정 요청"으로 간주하고 REVISING으로 전환.
             # (수락/저장 의사는 chat_app.py에서 별도 버튼으로 받는다 — 자유 텍스트로
@@ -307,6 +398,8 @@ class ConversationState:
         self.worksheet = None
         self.worksheet_doc_id = None
         self.worksheet_url = None
+        self.topic_checked = False
+        self.topic_check = None
 
 
 QUIZ_SLOT_QUESTIONS = {
@@ -327,7 +420,7 @@ QUIZ_SLOT_QUESTIONS_US = {
 
 
 @dataclass
-class QuizConversationState:
+class QuizConversationState(_ClarificationMixin):
     """Quiz Activity 전용 멀티턴 상태.
 
     ConversationState(토의·토론)와 상태 전이 구조(COLLECTING -> READY ->
@@ -349,6 +442,8 @@ class QuizConversationState:
     form_id: str | None = None
     edit_url: str | None = None
     responder_url: str | None = None
+    topic_checked: bool = False  # 2026-11-13, ConversationState와 같음
+    topic_check: object | None = None
 
     def missing_slots(self) -> list[str]:
         return [s for s in QUIZ_REQUIRED_SLOTS if s not in self.slots]
@@ -417,6 +512,9 @@ class QuizConversationState:
 
             return self._advance_and_get_reply()
 
+        if self.phase == Phase.CLARIFYING:
+            return self._handle_clarification(message)
+
         if self.phase == Phase.DRAFTED:
             # 문항을 본 뒤 사용자가 뭔가 말하면 "수정 요청"으로 간주 — 퀴즈는
             # 산출물이 하나뿐이라 ConversationState처럼 "어느 산출물을
@@ -470,3 +568,5 @@ class QuizConversationState:
         self.form_id = None
         self.edit_url = None
         self.responder_url = None
+        self.topic_checked = False
+        self.topic_check = None
