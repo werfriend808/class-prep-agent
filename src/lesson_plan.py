@@ -86,6 +86,16 @@ def extract_keywords(topic: str) -> list[str]:
     return seen
 
 
+_SCHOOL_LEVELS = {"초": "초등학교", "중": "중학교", "고": "고등학교"}
+
+
+def _school_level(grade: str) -> str:
+    """"중2" -> "중학교 ". 2026-11-13: 프롬프트가 학년과 상관없이 "고등학교 {subject} 교사"로
+    고정돼 있어서 초1을 골라도 고등학교 교사 역할로 계획안을 쓰고 있었다."""
+    level = _SCHOOL_LEVELS.get((grade or "")[:1])
+    return f"{level} " if level else ""
+
+
 def _build_prompt(
     subject: str,
     grade: str,
@@ -101,7 +111,7 @@ def _build_prompt(
         else ""
     )
     return (
-        f"당신은 고등학교 {subject} 교사를 돕는 수업 설계 도우미입니다. "
+        f"당신은 {_school_level(grade)}{subject} 교사를 돕는 수업 설계 도우미입니다. "
         f"{grade} 학생 대상 토의·토론 수업계획안을 아래 조건에 맞춰 작성해주세요.\n\n"
         f"주제: {topic}\n\n"
         f"참고할 국가교육과정 성취기준(2022 개정):\n{ncic_context}\n\n"
