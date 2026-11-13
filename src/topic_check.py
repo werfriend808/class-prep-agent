@@ -253,6 +253,26 @@ def _josa_wa(word: str) -> str:
     return "와(과)"
 
 
+def _relevant_locations(check: TopicCheck) -> list[dict]:
+    """되묻기 메시지에 근거로 보여줄 위치만 고른다.
+
+    2026-11-13 실제 실행: 영어 고1 "문법"(too_broad) 메시지에 "예술계열(전문교과)에서 관련
+    내용이 있어요"가 붙었다 — 키워드가 우연히 겹친 위치라 판정과 상관없고 사용자를
+    헷갈리게 한다. 그래서 판정을 뒷받침하는 위치만 보여준다:
+      - 다른 학년: 같은 과목의 위치만
+      - 다른 과목: 추천 과목의 위치만 (추천 과목이 없으면 보여주지 않음)
+      - 너무 넓음 / 맞는 조합: 보여주지 않음 (위치가 판정 근거가 아님)
+      - 안 맞음 / LLM 판정 없음: 전부 (규칙 근거가 유일한 정보)
+    """
+    if check.status == OTHER_GRADE:
+        return [loc for loc in check.locations if loc["subject"] == check.subject]
+    if check.status == OTHER_SUBJECT:
+        return [loc for loc in check.locations if loc["subject"] == check.suggested_subject]
+    if check.status in (MISMATCH, NO_MATCH):
+        return check.locations
+    return []
+
+
 def format_message(check: TopicCheck, locale: str = "ko") -> str:
     """되묻기 메시지. needs_clarification인 판정에만 쓴다."""
     if locale == "us":
@@ -273,7 +293,7 @@ def format_message(check: TopicCheck, locale: str = "ko") -> str:
     else:
         lines = [f"{head} {where} 성취기준에서 찾지 못했어요."]
 
-    found = [f"{loc['subject']} {loc['grade_group']}" for loc in check.locations][:3]
+    found = [f"{loc['subject']} {loc['grade_group']}" for loc in _relevant_locations(check)][:3]
     if found:
         lines.append(f"(성취기준 검색: {', '.join(found)}에서 관련 내용이 있어요.)")
     if check.narrower_topics:
@@ -297,7 +317,7 @@ def _format_message_us(check: TopicCheck) -> str:
         lines = [f"'{topic}' doesn't look like a fit for {where}."]
     else:
         lines = [f"I couldn't find '{topic}' in the {where} standards."]
-    found = [loc["grade_group"] for loc in check.locations][:3]
+    found = [loc["grade_group"] for loc in _relevant_locations(check)][:3]
     if found:
         lines.append(f"(Standards search: related content appears in {', '.join(found)}.)")
     if check.narrower_topics:

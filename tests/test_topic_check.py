@@ -191,3 +191,32 @@ def test_json_surrounded_by_text_is_still_parsed(fake_llm):
     fake_llm('판정 결과입니다:\n```json\n{"verdict": "other_grade", "suggested_grade": "고2"}\n```\n이상입니다.')
     check = tc.check_topic("도덕", "중2", "성선설 성악설")
     assert check.status == tc.OTHER_GRADE and check.suggested_grade == "고2"
+
+
+def test_too_broad_message_does_not_show_unrelated_locations(fake_llm):
+    # 실제 출력: 영어 고1 "문법" 메시지에 "예술계열(전문교과) ... 관련 내용이 있어요"가 붙었다.
+    fake_llm({"verdict": "too_broad", "narrower_topics": ["관계대명사절 이해하기"]})
+    check = tc.check_topic("영어", "고1", "문법")
+    assert check.locations  # 근거는 모았지만
+    message = tc.format_message(check)
+    assert "성취기준 검색" not in message and "예술계열" not in message  # 보여주지 않는다
+
+
+def test_other_grade_shows_only_same_subject_locations():
+    check = tc.TopicCheck(
+        tc.OTHER_GRADE, "수학", "초1", "이차함수", suggested_grade="중3",
+        locations=[{"subject": "수학", "grade_group": "중학교 1~3학년", "count": 3},
+                   {"subject": "과학계열(전문교과)", "grade_group": "고등학교 선택", "count": 9}],
+    )
+    message = tc.format_message(check)
+    assert "수학 중학교 1~3학년" in message and "과학계열" not in message
+
+
+def test_other_subject_shows_only_suggested_subject_locations():
+    check = tc.TopicCheck(
+        tc.OTHER_SUBJECT, "영어", "고1", "문법", suggested_subject="국어",
+        locations=[{"subject": "예술계열(전문교과)", "grade_group": "고등학교 선택", "count": 2},
+                   {"subject": "국어", "grade_group": "고등학교 공통", "count": 1}],
+    )
+    message = tc.format_message(check)
+    assert "국어 고등학교 공통" in message and "예술계열" not in message
