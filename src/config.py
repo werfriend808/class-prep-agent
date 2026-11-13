@@ -61,10 +61,12 @@ GOOGLE_TOKEN_PATH = _setting("GOOGLE_TOKEN_PATH", "token.json")
 # 학생 활동지 Google Doc을 만들 때 넣어줄 Drive 폴더 ID (선택). 비어있으면 내 드라이브 최상위에 생성.
 GOOGLE_DOCS_FOLDER_ID = _setting("GOOGLE_DOCS_FOLDER_ID", "")
 
-# 앱 로케일 — "ko"(기본, 한국/NCIC) | "us"(영어/Common Core Math, Phase 3).
+# 앱 로케일 — "us"(기본, 영어/Common Core Math) | "ko"(한국어/NCIC 2022 개정 교육과정).
 # 이 값 하나로 교육과정 provider와 UI/프롬프트 언어가 함께 바뀐다
 # (chat_app.py가 이 값에 따라 화면 전체를 한국어/영어 버전으로 분기한다).
-LOCALE = _setting("LOCALE", "ko")
+# 2026-11-12: 기본값을 "ko"에서 "us"로 바꿨다. 공개 데모와 README의 1차 대상이
+# 미국 사용자(TA·튜터)·채용 담당자라서다. 한국어 배포는 LOCALE=ko로 따로 띄운다.
+LOCALE = _setting("LOCALE", "us")
 
 # 교육과정 provider 선택. 명시적으로 지정하지 않으면 위 LOCALE에서 유도한다
 # ("ko" -> "ncic", "us" -> "common_core_math") — src/curriculum/__init__.py의

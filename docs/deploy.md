@@ -113,6 +113,17 @@ where not internal and activity is not null
 group by activity;
 ```
 
+## A second, Korean instance
+
+Streamlit Community Cloud allows only one app per repo + branch + main file,
+so the Korean app uses its own entry point: create another app from the same
+repo and branch with **Main file path `chat_app_ko.py`**. That file forces
+`LOCALE=ko` (Korean UI + NCIC curriculum, all subjects) before the app loads,
+so the secrets can be the same as the English app's; only `FEEDBACK_URL`
+should point to a Korean form if you have one. Both instances can share the
+Supabase project: events carry a `locale` column, and the daily LLM-call limit
+is counted across both, so there is still one cost ceiling.
+
 ## Running with the full integrations (local)
 
 Put `NOTION_API_KEY` (and the rest of `.env.example`) in `.env` and leave
