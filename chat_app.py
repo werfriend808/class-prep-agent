@@ -277,7 +277,7 @@ def _sync_worksheet_if_needed(conv: ConversationState, old_plan: dict | None, pl
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        st.error(f"학생 활동지 재생성에 실패했어요: {e}")
+        _show_generation_error(e)
     except GoogleDocsWriteError as e:
         st.error(f"Google Docs 반영에 실패했어요: {e}")
     except Exception as e:  # noqa: BLE001
@@ -293,6 +293,13 @@ def _sync_worksheet_if_needed(conv: ConversationState, old_plan: dict | None, pl
 # 네 화면(토의·토론/Quiz x ko/us) 모두 READY에서 생성하기 직전에 한 번 판정한다.
 # 성취기준을 찾으면 LLM 없이 바로 통과하고, 못 찾으면 LLM 판정 1회 후 필요하면
 # CLARIFYING으로 되묻는다. 되묻기 문장은 topic_check.format_message() 템플릿이다.
+
+
+def _show_generation_error(e) -> None:
+    """생성 실패(LessonPlanError/WorksheetError/QuizError) 표시. 화면엔 사용자용 문장만,
+    내부 사유(검수 LLM의 판단 과정, 응답 키 이름 등)는 서버 로그에만 남긴다 — src/errors.py."""
+    print(f"[generation] {type(e).__name__}: {e}")
+    st.error(e.user_message)
 
 
 def _topic_gate(conv, locale: str) -> bool:
@@ -374,7 +381,7 @@ def _run_generation(conv: ConversationState, revision_request: str | None = None
             )
     except LessonPlanError as e:
         usage.log_event("generation_failed", activity="lesson_plan")
-        st.error(str(e))
+        _show_generation_error(e)
         if old_plan is not None:
             # 수정 시도가 실패한 거라면 이전 초안으로 되돌아가서 다시 보여준다.
             conv.phase = Phase.DRAFTED
@@ -418,7 +425,8 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        conv.history.append({"role": "assistant", "content": str(e)})
+        print(f"[generation] {type(e).__name__}: {e}")
+        conv.history.append({"role": "assistant", "content": e.user_message})
     except GoogleDocsWriteError as e:
         conv.history.append({"role": "assistant", "content": f"Google Docs 반영에 실패했어요: {e}"})
     except Exception as e:  # noqa: BLE001
@@ -532,7 +540,7 @@ def _render_discussion_activity() -> None:
                             )
                 except WorksheetError as e:
                     usage.log_event("generation_failed", activity="worksheet")
-                    st.error(str(e))
+                    _show_generation_error(e)
                 except GoogleDocsWriteError as e:
                     st.error(str(e))
                 except Exception as e:  # noqa: BLE001
@@ -605,7 +613,7 @@ def _sync_worksheet_if_needed_us(conv: ConversationState, old_plan: dict | None,
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        st.error(f"Failed to regenerate the student worksheet: {e}")
+        _show_generation_error(e)
     except GoogleDocsWriteError as e:
         st.error(f"Failed to update Google Docs: {e}")
     except Exception as e:  # noqa: BLE001
@@ -634,7 +642,7 @@ def _run_generation_us(conv: ConversationState, revision_request: str | None = N
             )
     except LessonPlanError as e:
         usage.log_event("generation_failed", activity="lesson_plan")
-        st.error(str(e))
+        _show_generation_error(e)
         if conv.draft is not None:
             conv.phase = Phase.DRAFTED
         return False
@@ -668,7 +676,8 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        conv.history.append({"role": "assistant", "content": str(e)})
+        print(f"[generation] {type(e).__name__}: {e}")
+        conv.history.append({"role": "assistant", "content": e.user_message})
     except GoogleDocsWriteError as e:
         conv.history.append({"role": "assistant", "content": f"Failed to update Google Docs: {e}"})
     except Exception as e:  # noqa: BLE001
@@ -781,7 +790,7 @@ def _render_discussion_activity_us() -> None:
                             )
                 except WorksheetError as e:
                     usage.log_event("generation_failed", activity="worksheet")
-                    st.error(str(e))
+                    _show_generation_error(e)
                 except GoogleDocsWriteError as e:
                     st.error(str(e))
                 except Exception as e:  # noqa: BLE001
@@ -877,7 +886,7 @@ def _run_quiz_generation(quiz_conv: QuizConversationState, revision_request: str
             )
     except QuizError as e:
         usage.log_event("generation_failed", activity="quiz")
-        st.error(str(e))
+        _show_generation_error(e)
         if old_draft is not None:
             quiz_conv.phase = Phase.DRAFTED
         return False
@@ -1013,7 +1022,7 @@ def _run_quiz_generation_us(quiz_conv: QuizConversationState, revision_request: 
             )
     except QuizError as e:
         usage.log_event("generation_failed", activity="quiz")
-        st.error(str(e))
+        _show_generation_error(e)
         if old_draft is not None:
             quiz_conv.phase = Phase.DRAFTED
         return False
