@@ -51,8 +51,11 @@ from src.edit_propagation import classify_edit_target, worksheet_needs_update
 from src.forms_writer import FormsWriteError, create_quiz_form, replace_quiz_questions
 from src.google_docs_writer import GoogleDocsWriteError, create_and_write_doc, replace_doc_body
 from src.lesson_plan import LessonPlanError, generate_lesson_plan
+from src.llm import LLMServiceError
 from src.notion_writer import NotionWriteError, plan_to_markdown, save_lesson_plan_to_notion, update_lesson_plan_in_notion
 from src.quiz import QuizError, generate_quiz, quiz_to_markdown
+from src.topic_check import check_topic, format_message, grade_label
+from src.usage import QuotaExceededError
 from src.worksheet import WorksheetError, generate_worksheet, worksheet_to_text
 
 st.set_page_config(
@@ -284,6 +287,73 @@ def _sync_worksheet_if_needed(conv: ConversationState, old_plan: dict | None, pl
         conv.worksheet = new_worksheet
 
 
+# ============================================================
+# 과목·학년·주제 정합성 판정 (2026-11-13, src/topic_check.py)
+# ============================================================
+# 네 화면(토의·토론/Quiz x ko/us) 모두 READY에서 생성하기 직전에 한 번 판정한다.
+# 성취기준을 찾으면 LLM 없이 바로 통과하고, 못 찾으면 LLM 판정 1회 후 필요하면
+# CLARIFYING으로 되묻는다. 되묻기 문장은 topic_check.format_message() 템플릿이다.
+
+
+def _topic_gate(conv, locale: str) -> bool:
+    """생성해도 되면 True. 되묻기가 필요하면 상태를 CLARIFYING으로 바꾸고 다시 그린다."""
+    if conv.topic_checked:
+        return True
+    slots = conv.slots
+    try:
+        with st.spinner("Checking the topic..." if locale == "us" else "주제가 과목·학년에 맞는지 확인하는 중..."):
+            check = check_topic(slots["subject"], slots["grade"], slots["topic"], locale=locale)
+    except (QuotaExceededError, LLMServiceError) as e:
+        # 판정을 못 하는 상황이면 생성도 같은 이유로 실패한다 — 바로 알린다.
+        st.error(str(e))
+        return False
+    if check.needs_clarification:
+        conv.request_clarification(format_message(check, locale), check)
+        st.rerun()
+    conv.mark_topic_checked(check)
+    return True
+
+
+def _render_clarification_actions(conv, locale: str, key_prefix: str) -> None:
+    """되묻기 메시지 아래에 추천 학년/과목/주제 버튼과 '그대로 만들기' 버튼을 보여준다."""
+    check = conv.topic_check
+    is_us = locale == "us"
+    actions: list[tuple[str, str, str]] = []  # (버튼 라벨, 슬롯, 값)
+    if getattr(check, "suggested_grade", None):
+        label = grade_label(check.suggested_grade, locale)
+        actions.append((f"Switch to {label}" if is_us else f"{label}으로 바꾸기", "grade", check.suggested_grade))
+    if getattr(check, "suggested_subject", None):
+        subject = check.suggested_subject
+        actions.append((f"Switch to {subject}" if is_us else f"{subject} 과목으로 바꾸기", "subject", subject))
+    for topic in getattr(check, "narrower_topics", None) or []:
+        actions.append((f"Topic: {topic}" if is_us else f"주제: {topic}", "topic", topic))
+
+    for i, (label, slot, value) in enumerate(actions):
+        if st.button(label, key=f"{key_prefix}_clarify_{i}"):
+            conv.history.append({"role": "user", "content": label})
+            conv.change_slot(slot, value)
+            if slot == "topic":
+                # 판정 LLM이 "이 과목·학년에 맞게 좁힌 주제"로 직접 준 값이라 다시 판정하지
+                # 않는다 — 재판정하면 호출 1회를 더 쓰고, 같은 되묻기가 반복될 수 있다.
+                # 학년/과목 버튼은 다시 판정한다(성취기준이 있으면 LLM 없이 통과).
+                conv.mark_topic_checked()
+            st.rerun()
+    as_is = "Use as entered" if is_us else "그대로 만들기"
+    if st.button(as_is, key=f"{key_prefix}_clarify_as_is"):
+        conv.history.append({"role": "user", "content": as_is})
+        conv.accept_as_is()
+        st.rerun()
+
+
+def _unmatched_notice(locale: str) -> str:
+    if locale == "us":
+        return (
+            "No Common Core standard matched this topic, so this plan was written without a "
+            "standards reference."
+        )
+    return "이 주제와 연결된 성취기준을 찾지 못해서, 성취기준 근거 없이 작성된 계획안이에요."
+
+
 def _run_generation(conv: ConversationState, revision_request: str | None = None) -> bool:
     """계획안을 (재)생성하고 Notion/활동지에 동기화한다. 성공하면 True를 반환한다.
 
@@ -393,9 +463,12 @@ def _render_discussion_activity() -> None:
         st.rerun()
 
     # --- READY: 슬롯이 다 채워졌으면 자동으로 생성 트리거 ---
-    if conv.phase == Phase.READY:
+    if conv.phase == Phase.READY and _topic_gate(conv, "ko"):
         if _run_generation(conv):
             st.rerun()
+
+    if conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(conv, "ko", "discussion")
 
     # --- REVISING: 계획안 수정인지 활동지 수정인지 구분해서 처리 ---
     if conv.phase == Phase.REVISING:
@@ -421,6 +494,8 @@ def _render_discussion_activity() -> None:
             with st.expander("NCIC 교육과정 근거", expanded=False):
                 for ref in plan["ncic_references"]:
                     st.write(f"- {ref}")
+        else:
+            st.info(_unmatched_notice("ko"))
 
         st.download_button(
             "계획안 다운로드 (.md)",
@@ -639,9 +714,12 @@ def _render_discussion_activity_us() -> None:
             st.write(reply)
         st.rerun()
 
-    if conv.phase == Phase.READY:
+    if conv.phase == Phase.READY and _topic_gate(conv, "us"):
         if _run_generation_us(conv):
             st.rerun()
+
+    if conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(conv, "us", "discussion_us")
 
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
@@ -665,6 +743,8 @@ def _render_discussion_activity_us() -> None:
             with st.expander("Common Core Standards", expanded=False):
                 for ref in plan["standards_references"]:
                     st.write(f"- {ref}")
+        else:
+            st.info(_unmatched_notice("us"))
 
         st.download_button(
             "Download lesson plan (.md)",
@@ -835,9 +915,12 @@ def _render_quiz_activity() -> None:
             st.write(reply)
         st.rerun()
 
-    if quiz_conv.phase == Phase.READY:
+    if quiz_conv.phase == Phase.READY and _topic_gate(quiz_conv, "ko"):
         if _run_quiz_generation(quiz_conv):
             st.rerun()
+
+    if quiz_conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(quiz_conv, "ko", "quiz")
 
     if quiz_conv.phase == Phase.REVISING:
         if _run_quiz_generation(quiz_conv, revision_request=quiz_conv.slots.get("revision_request")):
@@ -970,9 +1053,12 @@ def _render_quiz_activity_us() -> None:
             st.write(reply)
         st.rerun()
 
-    if quiz_conv.phase == Phase.READY:
+    if quiz_conv.phase == Phase.READY and _topic_gate(quiz_conv, "us"):
         if _run_quiz_generation_us(quiz_conv):
             st.rerun()
+
+    if quiz_conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(quiz_conv, "us", "quiz_us")
 
     if quiz_conv.phase == Phase.REVISING:
         if _run_quiz_generation_us(quiz_conv, revision_request=quiz_conv.slots.get("revision_request")):
