@@ -157,3 +157,31 @@ def available_subjects() -> list[str]:
         if s["subject"] not in seen:
             seen.append(s["subject"])
     return seen
+
+
+def locate_topic(keywords: list[str] | None, limit: int = 6) -> list[dict]:
+    """키워드가 과목/학년군 상관없이 데이터셋 어디에 나오는지 위치별 건수로 요약한다.
+
+    2026-11-13: 과목·학년·주제 정합성 판정(src/topic_check.py)용. `match_standards()`는
+    "이 과목·이 학년에서" 찾기 때문에 0건이면 "왜 없는지"를 알 수 없다 — 같은
+    키워드를 전체 데이터셋에 대고 다시 세서 "다른 학년(같은 과목)에는 있다" /
+    "다른 과목에는 있다" / "어디에도 없다"를 구분할 근거를 만든다. 스코어링은
+    `match_standards()`와 똑같이 성취기준 문장에 키워드가 그대로 들어있는지만 본다
+    (그래서 표현이 다르면 여기서도 못 찾는다 — 그 경우는 topic_check의 LLM 판정 몫).
+
+    반환: [{"subject", "grade_group", "count", "example_code"}] — count 내림차순.
+    """
+    keywords = [kw for kw in (keywords or []) if kw]
+    if not keywords:
+        return []
+    counts: dict[tuple[str, str], list] = {}
+    for record in load_standards():
+        if any(kw in record["text"] for kw in keywords):
+            key = (record["subject"], record["grade"])
+            entry = counts.setdefault(key, [0, record["code"]])
+            entry[0] += 1
+    ranked = sorted(counts.items(), key=lambda item: item[1][0], reverse=True)
+    return [
+        {"subject": subject, "grade_group": grade_group, "count": count, "example_code": code}
+        for (subject, grade_group), (count, code) in ranked[:limit]
+    ]

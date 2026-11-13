@@ -100,3 +100,29 @@ def test_format_citation_includes_code_and_source():
     assert "10통사1-01-01" in citation
     assert "성취기준 텍스트" in citation
     assert "[별책7] 사회과 교육과정.pdf" in citation
+
+
+# --- locate_topic (2026-11-13, 과목·학년·주제 정합성 판정의 근거) ---------------
+from src.ncic_matcher import locate_topic  # noqa: E402
+
+
+def test_locate_topic_finds_quadratic_functions_in_middle_and_high_school_math():
+    # "초1 수학 + 이차함수"가 0건인 이유를 설명할 근거: 수학의 다른 학년군에는 있다.
+    locations = locate_topic(["이차함수"])
+    found = {(loc["subject"], loc["grade_group"]) for loc in locations}
+    assert ("수학", "중학교 1~3학년") in found
+    assert ("수학", "고등학교 공통") in found
+    assert all(loc["subject"] == "수학" for loc in locations)
+    assert locations == sorted(locations, key=lambda loc: loc["count"], reverse=True)
+
+
+def test_locate_topic_returns_empty_for_wording_not_in_standards():
+    # 알려진 한계를 고정해둔다: 성취기준 원문이 "인간 본성"/"고전 문학" 같은 다른
+    # 표현을 쓰는 주제는 키워드 매칭으로는 어디에서도 못 찾는다(그래서 LLM 판정이 필요).
+    assert locate_topic(["성선설", "성악설"]) == []
+    assert locate_topic(["고전시가"]) == []
+
+
+def test_locate_topic_handles_empty_keywords():
+    assert locate_topic([]) == []
+    assert locate_topic(None) == []

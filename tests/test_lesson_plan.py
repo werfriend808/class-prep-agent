@@ -130,6 +130,9 @@ class _FakeProvider(CurriculumProvider):
     def format_citation(self, record):
         return f"인용:{record['code']}"
 
+    def locate_topic(self, keywords, limit=6):
+        return []
+
 
 def test_generate_lesson_plan_uses_injected_provider():
     fake_text = _fake_plan_json()
