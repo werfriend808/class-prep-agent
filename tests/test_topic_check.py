@@ -169,3 +169,25 @@ def test_grade_label_and_josa():
     assert tc.grade_label("K", "us") == "Kindergarten"
     assert tc._josa_eun("문법") == "은" and tc._josa_eun("이차함수") == "는"
     assert tc._josa_wa("고등학교 1학년 도덕") == "과" and tc._josa_wa("고등학교 1학년 영어") == "와"
+
+
+# --- 실제 실행(2026-11-13, scripts/check_topic_live.py) 결과로 고친 부분 --------------
+def test_judge_call_leaves_room_for_thinking_tokens(fake_llm):
+    # 출력 한도 400에서 도덕 중2 "성선설 성악설" 판정 응답이 잘려 판정을 못 받았다.
+    calls = []
+    fake = fake_llm({"verdict": "other_grade", "suggested_grade": "고2"})
+    original = fake.__call__
+
+    def capture(prompt, max_tokens=1000):
+        calls.append(max_tokens)
+        return original(prompt, max_tokens)
+
+    tc.complete = capture
+    tc.check_topic("도덕", "중2", "성선설 성악설")
+    assert calls == [tc.JUDGE_MAX_TOKENS] and tc.JUDGE_MAX_TOKENS >= 1500
+
+
+def test_json_surrounded_by_text_is_still_parsed(fake_llm):
+    fake_llm('판정 결과입니다:\n```json\n{"verdict": "other_grade", "suggested_grade": "고2"}\n```\n이상입니다.')
+    check = tc.check_topic("도덕", "중2", "성선설 성악설")
+    assert check.status == tc.OTHER_GRADE and check.suggested_grade == "고2"

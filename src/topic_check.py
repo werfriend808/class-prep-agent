@@ -30,7 +30,6 @@ LLM 판정이 실패하면(응답 형식 오류 등) 2단계 근거만으로 되
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 
 from .conversation import extract_grade, extract_subject, extract_subject_us
@@ -55,6 +54,10 @@ _LLM_VERDICTS = {
     "mismatch": MISMATCH,
 }
 _MAX_NARROWER = 3
+# 판정 응답은 JSON 한 줄이지만, thinking이 기본으로 켜진 모델은 thinking 토큰도 이 한도에
+# 포함된다. 처음엔 400으로 잡았다가 실제 실행(2026-11-13, claude-sonnet-5)에서 응답이
+# 잘려 판정을 못 받았다. 과금은 실제로 생성한 만큼만이라 quiz 검수 호출과 같은 1500을 쓴다.
+JUDGE_MAX_TOKENS = 1500
 _MAX_TOPIC_LEN = 40
 _US_GRADES = {"K", *[str(n) for n in range(1, 13)]}
 
@@ -99,7 +102,7 @@ def check_topic(
         else _build_prompt(subject, grade, topic, locations, provider.subjects())
     )
     try:
-        raw = complete(prompt, max_tokens=400)
+        raw = complete(prompt, max_tokens=JUDGE_MAX_TOKENS)
     except (QuotaExceededError, LLMServiceError):
         raise
     except Exception:  # noqa: BLE001 — 판정 실패는 규칙 근거만으로 되묻는다
@@ -165,12 +168,13 @@ def _build_prompt_us(subject: str, grade: str, topic: str, locations: list[dict]
 
 def _apply_verdict(check: TopicCheck, raw: str, locale: str) -> None:
     """LLM 응답을 검증해서 check에 반영한다. 형식이 틀리면 check를 NO_MATCH 그대로 둔다."""
-    text = raw.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
-        text = re.sub(r"```\s*$", "", text)
+    # "JSON만 답하라"고 해도 앞뒤에 설명이나 코드 펜스를 붙이는 경우가 있어서, 첫 '{'부터
+    # 마지막 '}'까지만 잘라서 파싱한다. 그래도 안 되면 NO_MATCH 그대로 둔다.
+    start, end = raw.find("{"), raw.rfind("}")
+    if start == -1 or end <= start:
+        return
     try:
-        data = json.loads(text)
+        data = json.loads(raw[start : end + 1])
     except json.JSONDecodeError:
         return
     if not isinstance(data, dict):
