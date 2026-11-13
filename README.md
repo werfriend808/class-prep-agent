@@ -54,6 +54,12 @@ When a plan is revised, should the worksheet be regenerated? The worksheet promp
 **A hand-written MCP client for Notion; REST for Google.**
 `NotionMCPClient` talks to the official Notion MCP server over stdio using the Python `mcp` SDK. Working against the real server surfaced things the docs didn't mention: tool names carry an `API-` prefix, and validation errors come back inside a successful response (`isError` is not set), so the writer checks the response body too. Google Docs/Forms use the REST API instead: there is no Forms MCP server, and the Docs MCP preview had no create-document tool. → [`src/mcp_client.py`](src/mcp_client.py), [`src/notion_writer.py`](src/notion_writer.py)
 
+**Check that subject, grade and topic fit before generating — rules first, LLM only when rules can't tell.**
+The chat collects subject → grade → topic one at a time, and nothing checked that they fit together: "quadratic functions" for Grade 1 was generated anyway, and a topic with no matching standard was generated without telling the user. Literal keyword matching can't decide this alone: a valid topic worded differently from the standards also gets zero matches. So `check_topic()` passes immediately when standards match (no extra call), and only for zero matches gathers evidence from other grades/subjects and asks the LLM for a verdict. The verdict is validated, never displayed: suggested grades and subjects must parse with the chat's own slot extractors, and every sentence the user sees comes from a template. → [`src/topic_check.py`](src/topic_check.py)
+
+**Separate the error the user reads from the reason the model reads.**
+A failed quiz once showed the review LLM's reasoning as its error message, because one string served as both the retry-prompt feedback and the on-screen message. Generation errors now carry both: `str(e)` for retry prompts and logs, `e.user_message` for the screen. Quota and outage errors are not retried, since a retry fails the same way. → [`src/errors.py`](src/errors.py)
+
 **Every LLM call goes through one function.**
 `llm.complete()` is the only path to a model. That made it possible to swap providers with one setting (Claude ↔ Naver Clova), and later to add cost caps and per-call token measurement for the public demo without touching any feature module. → [`src/llm.py`](src/llm.py)
 
@@ -92,7 +98,7 @@ python -m streamlit run chat_app.py
 - The full Notion + Google Docs + Google Forms setup is described in [`README.ko.md`](README.ko.md) §7, §12, §17 (Korean).
 - `app.py` is a separate tool: natural-language search and summarization over a Notion workspace via MCP.
 
-**Tests:** `python -m pytest`. 257 tests run on mocked LLM calls and fake data (no API key, network, or credit needed), including a Streamlit `AppTest` that drives the full demo flow end to end.
+**Tests:** `python -m pytest`. 328 tests run on mocked LLM calls and fake data (no API key, network, or credit needed), including a Streamlit `AppTest` that drives the full demo flow end to end.
 
 ## Project structure
 
@@ -104,6 +110,8 @@ src/
   lesson_plan.py         lesson plan generation (en + ko prompts)
   worksheet.py           student worksheet generation
   quiz.py                quiz generation, code checks, LLM review pass
+  topic_check.py         subject/grade/topic fit check before generation
+  errors.py              user-facing vs internal error messages, one-retry policy
   edit_propagation.py    plan → worksheet consistency
   curriculum/            CurriculumProvider + Common Core Math / NCIC
   llm.py                 single LLM entry point (Claude / Clova)
@@ -121,6 +129,7 @@ tests/
 - The English mode covers Math only.
 - The public demo does not write to Notion/Google; that needs per-user OAuth.
 - Usage metrics count browser sessions, not people, and cannot measure return visits.
+- The topic check's LLM verdicts haven't been measured against real model output yet (`python scripts/check_topic_live.py` runs the reference cases). A broad topic that still matches standards (Grade 9 "algebra") passes the check.
 - A quiz revision that names a question by number ("make question 3 easier") can reorder questions instead of editing that one in place.
 
 ## Origin
