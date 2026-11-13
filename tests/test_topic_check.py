@@ -220,3 +220,32 @@ def test_other_subject_shows_only_suggested_subject_locations():
     )
     message = tc.format_message(check)
     assert "국어 고등학교 공통" in message and "예술계열" not in message
+
+
+# --- Haiku 실행(2026-11-13) 결과로 고친 부분 ------------------------------------
+@pytest.mark.parametrize("value", [9, "9", "Grade 9", "9th grade", "High School"])
+def test_us_suggested_grade_accepts_common_spellings(fake_llm, value):
+    fake_llm({"verdict": "other_grade", "suggested_grade": value})
+    check = tc.check_topic("Math", "1", "quadratic functions", locale="us")
+    assert check.suggested_grade == "9"
+    assert check.llm_raw is not None  # 진단용 원문은 남기되
+    assert check.llm_raw not in tc.format_message(check, "us")  # 화면엔 안 나간다
+
+
+def test_us_message_without_suggested_grade_is_grammatical(fake_llm):
+    fake_llm({"verdict": "other_grade", "suggested_grade": None})
+    message = tc.format_message(tc.check_topic("Math", "1", "quadratic functions", locale="us"), "us")
+    assert "It looks closer to content from a different grade." in message
+    assert "a different grade content" not in message
+
+
+def test_narrower_topics_drop_original_topic_case_insensitively(fake_llm):
+    fake_llm({"verdict": "other_grade", "suggested_grade": "9",
+              "narrower_topics": ["Quadratic functions", "counting to 120", "COUNTING TO 120"]})
+    check = tc.check_topic("Math", "1", "quadratic functions", locale="us")
+    assert check.narrower_topics == ["counting to 120"]
+
+
+def test_boolean_is_not_a_grade(fake_llm):
+    fake_llm({"verdict": "other_grade", "suggested_grade": True})
+    assert tc.check_topic("Math", "1", "quadratic functions", locale="us").suggested_grade is None

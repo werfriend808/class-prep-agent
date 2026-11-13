@@ -72,6 +72,8 @@ def main() -> None:
         print(f"  좁힌 주제: {check.narrower_topics}")
         print(f"  성취기준: {len(check.standards)}건   다른 위치: "
               f"{[(loc['subject'], loc['grade_group'], loc['count']) for loc in check.locations]}")
+        if check.llm_raw is not None:
+            print(f"  LLM 원문 응답: {check.llm_raw.strip()}")
         if check.needs_clarification:
             print("  화면 문구:")
             for line in topic_check.format_message(check, locale).splitlines():

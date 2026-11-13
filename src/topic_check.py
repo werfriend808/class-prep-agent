@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from .conversation import extract_grade, extract_subject, extract_subject_us
+from .conversation import extract_grade, extract_grade_us, extract_subject, extract_subject_us
 from .curriculum import CurriculumProvider, get_provider
 from .lesson_plan import extract_keywords
 from .llm import LLMServiceError, complete
@@ -74,6 +74,9 @@ class TopicCheck:
     suggested_subject: str | None = None
     narrower_topics: list[str] = field(default_factory=list)
     used_llm: bool = False
+    # 판정 LLM의 원문 응답. 화면에는 절대 쓰지 않고, scripts/check_topic_live.py가 판정이
+    # 기대와 다를 때 "모델이 실제로 뭐라고 답했는지" 보여주는 진단용으로만 쓴다.
+    llm_raw: str | None = None
 
     @property
     def needs_clarification(self) -> bool:
@@ -107,6 +110,7 @@ def check_topic(
         raise
     except Exception:  # noqa: BLE001 — 판정 실패는 규칙 근거만으로 되묻는다
         return check
+    check.llm_raw = raw
     _apply_verdict(check, raw, locale)
     return check
 
@@ -192,12 +196,20 @@ def _apply_verdict(check: TopicCheck, raw: str, locale: str) -> None:
 
 
 def _valid_grade(value: object, current: str, locale: str) -> str | None:
+    """추천 학년을 대화 슬롯 형식으로 정규화한다. 못 알아들으면 None.
+
+    2026-11-13 Haiku 실행에서 US 판정이 other_grade인데 추천 학년이 버려졌다 — "9"
+    문자열만 받았는데, 모델은 숫자(9)나 "9th grade"/"High School"처럼 답할 수 있다.
+    숫자도 받고, 문자열은 대화 단계와 같은 추출기(extract_grade_us)로 한 번 더 읽는다.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
     if not isinstance(value, str) or not value.strip():
         return None
     value = value.strip()
     if locale == "us":
         normalized = value.upper().removeprefix("GRADE").strip()
-        grade = normalized if normalized in _US_GRADES else None
+        grade = normalized if normalized in _US_GRADES else extract_grade_us(value)
     else:
         grade = extract_grade(value)
     return grade if grade and grade != current else None
@@ -220,7 +232,9 @@ def _valid_topics(value: object, current_topic: str) -> list[str]:
         item = item.strip().strip("'\"")
         if not item or len(item) > _MAX_TOPIC_LEN or "\n" in item:
             continue
-        if item == current_topic.strip() or item in topics:
+        # 대소문자·앞뒤 공백만 다른 원래 주제도 대안이 아니다 (Haiku 실행에서 "quadratic functions"
+        # 입력에 "Quadratic functions"가 대안으로 나왔다).
+        if item.casefold() == current_topic.strip().casefold() or item.casefold() in (t.casefold() for t in topics):
             continue
         topics.append(item)
         if len(topics) == _MAX_NARROWER:
@@ -309,8 +323,12 @@ def _format_message_us(check: TopicCheck) -> str:
     topic = check.topic.strip()
     where = f"{grade_label(check.grade, 'us')} {check.subject}"
     if check.status == OTHER_GRADE:
-        target = grade_label(check.suggested_grade, "us") if check.suggested_grade else "a different grade"
-        lines = [f"I couldn't find '{topic}' in the {where} standards. It looks closer to {target} content."]
+        target = (
+            f"{grade_label(check.suggested_grade, 'us')} content"
+            if check.suggested_grade
+            else "content from a different grade"
+        )
+        lines = [f"I couldn't find '{topic}' in the {where} standards. It looks closer to {target}."]
     elif check.status == TOO_BROAD:
         lines = [f"'{topic}' is too broad to cover in a single lesson or quiz. Could you narrow it down?"]
     elif check.status in (MISMATCH, OTHER_SUBJECT):
