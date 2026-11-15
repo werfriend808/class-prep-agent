@@ -152,3 +152,24 @@ def test_quiz_conversation_state_ko_locale_is_default_and_unaffected():
     conv = QuizConversationState()
     assert conv.locale == "ko"
     assert "과목" in conv.next_question()
+
+
+# --- 2026-11-14: 선택형 입력 폼 진입점 (start_from_form, 토의·토론과 같은 믹스인) ---
+
+def test_quiz_start_from_form_fills_slots_and_goes_ready():
+    from src.conversation import Phase, QuizConversationState
+
+    conv = QuizConversationState()
+    reply = conv.start_from_form("과학", "중1", " 광합성 ")
+    assert conv.phase == Phase.READY
+    assert conv.slots == {"subject": "과학", "grade": "중1", "topic": "광합성"}
+    assert "퀴즈" in reply and "중1" in reply
+
+
+def test_quiz_start_from_form_us_locale():
+    from src.conversation import Phase, QuizConversationState
+
+    conv = QuizConversationState(locale="us")
+    reply = conv.start_from_form("Math", "5", "adding fractions")
+    assert conv.phase == Phase.READY
+    assert "Grade 5 quiz" in reply
