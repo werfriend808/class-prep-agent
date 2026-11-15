@@ -13,8 +13,8 @@ Activity 선택 화면(스펙 필수 UI 요소) 하나에서 두 Activity를 고
     강사용 자료엔 필요하다고 판단해 폴백을 고쳐서 복원, README 13-7) -> 생성되는 즉시 Notion에
     자동 반영(notion_writer.py) -> 사용자가 원하면 버튼으로 학생 활동지 생성
     (worksheet.py) -> Google Docs에 자동 반영(google_docs_writer.py). 생성 후
-    채팅 수정 요청은 edit_propagation.classify_edit_target()으로 계획안/활동지
-    중 어느 쪽 얘기인지 구분해서 해당 문서만 갱신한다 — 활동지 관련 필드
+    채팅 수정 요청은 사용자가 고른 대상(계획안/활동지, 2026-11-14부터 라디오로
+    직접 선택)만 갱신한다 — 활동지 관련 필드
     (주제/과목/학년/토론 쟁점/수업 흐름)가 바뀌면 활동지도 자동으로 같이
     갱신된다(edit_propagation.worksheet_needs_update()).
 
@@ -47,7 +47,7 @@ from src import usage
 from src.config import DEMO_MODE, FEEDBACK_URL, LOCALE
 from src.conversation import ConversationState, Phase, QuizConversationState
 from src.curriculum import get_provider
-from src.edit_propagation import classify_edit_target, worksheet_needs_update
+from src.edit_propagation import worksheet_needs_update
 from src.forms_writer import FormsWriteError, create_quiz_form, replace_quiz_questions
 from src.google_docs_writer import GoogleDocsWriteError, create_and_write_doc, replace_doc_body
 from src.lesson_plan import LessonPlanError, generate_lesson_plan
@@ -526,7 +526,7 @@ def _render_discussion_activity() -> None:
     # --- REVISING: 계획안 수정인지 활동지 수정인지 구분해서 처리 ---
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        # 2026-11-14: 키워드 추측(classify_edit_target) 대신 사용자가 고른 대상을 쓴다.
+        # 2026-11-14: 예전 키워드 추측(edit_propagation.classify_edit_target, 삭제됨) 대신 사용자가 고른 대상을 쓴다.
         # "질문을 쉽게 바꿔줘"처럼 '활동지'라는 단어 없이 활동지를 말하는 경우를 놓치지 않게.
         target = st.session_state.pop(EDIT_TARGET_PENDING_KEY, "plan")
         if target == "worksheet" and _has_worksheet(conv):

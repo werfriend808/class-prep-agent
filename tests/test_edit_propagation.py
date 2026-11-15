@@ -1,24 +1,8 @@
 from src.edit_propagation import (
     WORKSHEET_RELEVANT_FIELDS,
     WORKSHEET_RELEVANT_FIELDS_US,
-    classify_edit_target,
     worksheet_needs_update,
 )
-
-
-def test_classify_edit_target_defaults_to_plan_without_keywords():
-    assert classify_edit_target("토론 시간을 20분으로 늘려줘", has_worksheet=True) == "plan"
-
-
-def test_classify_edit_target_detects_worksheet_keyword():
-    assert classify_edit_target("활동지 난이도를 낮춰줘", has_worksheet=True) == "worksheet"
-    assert classify_edit_target("학생 활동 질문을 줄여줘", has_worksheet=True) == "worksheet"
-    assert classify_edit_target("워크시트 좀 더 쉽게 만들어줘", has_worksheet=True) == "worksheet"
-
-
-def test_classify_edit_target_always_plan_when_no_worksheet_exists():
-    # 활동지가 아직 없으면 "활동지" 키워드가 있어도 고칠 대상이 없으니 plan으로 취급.
-    assert classify_edit_target("활동지 난이도를 낮춰줘", has_worksheet=False) == "plan"
 
 
 def _plan(**overrides) -> dict:
@@ -78,22 +62,8 @@ def test_relevant_fields_match_worksheet_prompt_inputs():
     assert set(WORKSHEET_RELEVANT_FIELDS) == {"topic", "subject", "grade", "토론_쟁점", "수업_흐름"}
 
 
-# 2026-09-18: locale="us" 경로 -- 영어 키워드(_WORKSHEET_KEYWORDS_US)와 영어 계획안
-# 필드(discussion_issues/lesson_flow, WORKSHEET_RELEVANT_FIELDS_US)를 쓰는지 확인한다.
-def test_classify_edit_target_us_locale_defaults_to_plan_without_keywords():
-    assert classify_edit_target("make the discussion longer", has_worksheet=True, locale="us") == "plan"
-
-
-def test_classify_edit_target_us_locale_detects_worksheet_keyword():
-    assert classify_edit_target("make the worksheet easier", has_worksheet=True, locale="us") == "worksheet"
-    assert classify_edit_target("shorten the student activity", has_worksheet=True, locale="us") == "worksheet"
-    assert classify_edit_target("simplify the Activity Sheet", has_worksheet=True, locale="us") == "worksheet"
-
-
-def test_classify_edit_target_us_locale_always_plan_when_no_worksheet_exists():
-    assert classify_edit_target("make the worksheet easier", has_worksheet=False, locale="us") == "plan"
-
-
+# 2026-09-18: locale="us" 경로 -- 영어 계획안 필드(discussion_issues/lesson_flow,
+# WORKSHEET_RELEVANT_FIELDS_US)를 쓰는지 확인한다.
 def _plan_us(**overrides) -> dict:
     base = {
         "topic": "Environment vs Development",
