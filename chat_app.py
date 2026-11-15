@@ -750,17 +750,48 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
     return True
 
 
+# 2026-11-14: US 입력 폼 — 한국어 _render_discussion_form()과 같은 이유로 과목·학년은
+# 선택형, 주제만 자유 입력. 학년 값은 common_core_math_matcher가 바로 알아듣는
+# "K", "1"~"12" 그대로 넘긴다. 과목이 하나(Math)뿐이면 미리 골라둔다.
+GRADE_OPTIONS_US = ["K"] + [str(n) for n in range(1, 13)]
+EDIT_TARGET_KEY_US = "discussion_edit_target_us"
+EDIT_TARGET_PENDING_KEY_US = "discussion_edit_target_pending_us"
+EDIT_TARGET_LAST_KEY_US = "discussion_edit_target_last_us"
+
+
+def _render_discussion_form_us() -> None:
+    conv: ConversationState = st.session_state.conv_us
+    subjects = get_provider("common_core_math").subjects()
+    with st.form("discussion_form_us"):
+        subject = st.selectbox(
+            "Subject", subjects, index=0 if len(subjects) == 1 else None,
+            placeholder="Choose a subject", key="discussion_form_subject_us",
+        )
+        grade = st.selectbox(
+            "Grade", GRADE_OPTIONS_US, index=None, format_func=lambda g: grade_label(g, "us"),
+            placeholder="Choose a grade", key="discussion_form_grade_us",
+        )
+        topic = st.text_input(
+            "Discussion topic", placeholder="e.g. Is it fair to round numbers when splitting a bill?",
+            key="discussion_form_topic_us",
+        )
+        submitted = st.form_submit_button("Create lesson plan")
+    if submitted:
+        if not subject or not grade or not topic.strip():
+            st.warning("Please fill in the subject, grade, and topic.")
+            return
+        conv.start_from_form(subject, grade, topic)
+        st.rerun()
+
+
 def _render_discussion_activity_us() -> None:
     if "conv_us" not in st.session_state:
         st.session_state.conv_us = ConversationState(locale="us")
-        st.session_state.conv_us.history.append(
-            {"role": "assistant", "content": st.session_state.conv_us.next_question()}
-        )
     conv: ConversationState = st.session_state.conv_us
 
     st.caption(
-        f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and topic, "
-        "and I'll put together a discussion-based lesson plan grounded in Common Core standards"
+        "Pick a subject, grade, and topic, and I'll put together a discussion-based lesson plan "
+        "grounded in Common Core standards"
         + (". " if DEMO_MODE else " and save it to Notion. ")
         + "After it's generated, you can keep asking for revisions in the chat, and you can also "
         "generate a matching student worksheet."
@@ -770,8 +801,18 @@ def _render_discussion_activity_us() -> None:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
+    # 입력 단계(COLLECTING)는 폼으로 받고, 채팅창은 되묻기(CLARIFYING)와 수정 단계에서만 쓴다.
+    if conv.phase == Phase.COLLECTING:
+        _render_discussion_form_us()
+        return
+
     user_input = st.chat_input("Type a message", key="discussion_chat_input_us")
     if user_input:
+        if conv.phase == Phase.DRAFTED:
+            # 한국어 버전과 같은 이유: 라디오는 REVISING 단계에서 안 그려져 값이 사라지므로 제출 시점에 옮겨둔다.
+            target = st.session_state.get(EDIT_TARGET_KEY_US, "plan") if _has_worksheet(conv) else "plan"
+            st.session_state[EDIT_TARGET_PENDING_KEY_US] = target
+            st.session_state[EDIT_TARGET_LAST_KEY_US] = target
         with st.chat_message("user"):
             st.write(user_input)
         reply = conv.handle_message(user_input)
@@ -788,8 +829,8 @@ def _render_discussion_activity_us() -> None:
 
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        target = classify_edit_target(revision_request, has_worksheet=_has_worksheet(conv), locale="us")
-        if target == "worksheet":
+        target = st.session_state.pop(EDIT_TARGET_PENDING_KEY_US, "plan")
+        if target == "worksheet" and _has_worksheet(conv):
             if _run_worksheet_revision_us(conv, revision_request):
                 st.rerun()
         elif _run_generation_us(conv, revision_request=revision_request):
@@ -880,11 +921,21 @@ def _render_discussion_activity_us() -> None:
         st.divider()
         if st.button("Start over", key="reset_us"):
             conv.reset()
-            conv.history.append({"role": "assistant", "content": conv.next_question()})
+            conv.history = []  # back to the form, so clear the old conversation
+            st.session_state.pop(EDIT_TARGET_LAST_KEY_US, None)
             st.rerun()
 
+        if _has_worksheet(conv):
+            st.radio(
+                "Apply chat revisions to:",
+                ["plan", "worksheet"],
+                index=1 if st.session_state.get(EDIT_TARGET_LAST_KEY_US) == "worksheet" else 0,
+                format_func=lambda t: "Lesson plan" if t == "plan" else "Student worksheet",
+                horizontal=True,
+                key=EDIT_TARGET_KEY_US,
+            )
         st.caption(
-            "Type any revision requests in the chat above (e.g. 'shorten the discussion issues to "
+            "Type any revision requests in the chat below (e.g. 'shorten the discussion issues to "
             "3 items', 'make the lesson flow fit a 30-minute class'). "
             + (
                 "If a revision affects the worksheet, the worksheet is regenerated too. "
@@ -892,8 +943,11 @@ def _render_discussion_activity_us() -> None:
                 else "Revisions are saved back to the same Notion page, and if they affect the worksheet, "
                 "the worksheet is regenerated too. "
             )
-            + 
-            "Mention 'worksheet' in your message to edit only the worksheet and leave the lesson plan as is."
+            + (
+                "Choose 'Student worksheet' to edit only the worksheet and leave the lesson plan as is."
+                if _has_worksheet(conv)
+                else ""
+            )
         )
 
 

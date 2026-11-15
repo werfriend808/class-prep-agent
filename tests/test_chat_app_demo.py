@@ -89,8 +89,11 @@ def _chat(at: AppTest, text: str) -> AppTest:
 def test_lesson_plan_flow_in_demo_mode(demo_us):
     at = AppTest.from_file("../chat_app.py", default_timeout=30).run()
     assert not at.exception
-    for msg in ["Math", "Grade 5", "adding fractions"]:
-        _chat(at, msg)
+    # 2026-11-14: 토의·토론 입력은 채팅 대신 폼 (과목은 Math 하나라 미리 선택돼 있다)
+    assert at.selectbox(key="discussion_form_subject_us").value == "Math"
+    at.selectbox(key="discussion_form_grade_us").set_value("5")
+    at.text_input(key="discussion_form_topic_us").input("adding fractions")
+    next(b for b in at.button if b.label == "Create lesson plan").click().run()
     assert not at.exception
     assert not at.error, [e.value for e in at.error]
     assert any("Discussion Lesson Plan" in h.value for h in at.subheader)
@@ -112,11 +115,20 @@ def test_lesson_plan_flow_in_demo_mode(demo_us):
     assert not at.exception
     assert not at.error, [e.value for e in at.error]
 
+    # 수정 대상으로 활동지를 고르면 'worksheet'라는 단어 없이도 활동지만 고친다
+    assert at.radio(key="discussion_edit_target_us").value == "plan"
+    at.radio(key="discussion_edit_target_us").set_value("worksheet")
+    _chat(at, "make the questions easier")
+    assert not at.exception
+    assert not at.error, [e.value for e in at.error]
+    assert at.radio(key="discussion_edit_target_us").value == "worksheet"
+
     events, _rows = demo_us
     assert events.count("session_start") == 1  # 재실행(rerun)마다 다시 세지 않음
     assert "plan_generated" in events
     assert "worksheet_generated" in events
     assert "plan_revised" in events
+    assert "worksheet_revised" in events  # 활동지를 대상으로 고른 수정
 
 
 def test_quiz_flow_in_demo_mode(demo_us):

@@ -176,7 +176,9 @@ def test_us_locale_wrong_grade_flow(demo_ko, monkeypatch):
     monkeypatch.setattr(config, "LOCALE", "us")
     demo_ko.verdict = {"verdict": "other_grade", "suggested_grade": "9"}
     at = _start()
-    _chat(at, "Math", "Grade 1", "quadratic functions")
+    at.selectbox(key="discussion_form_grade_us").set_value("1")
+    at.text_input(key="discussion_form_topic_us").input("quadratic functions")
+    _click(at, "Create lesson plan")
     assert not at.exception
     assert demo_ko.plan_calls == []
     assert "Grade 9" in _assistant_texts(at)[-1]
