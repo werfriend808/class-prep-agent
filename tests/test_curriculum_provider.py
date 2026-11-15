@@ -125,3 +125,8 @@ def test_common_core_math_provider_format_citation_matches_matcher():
     assert CommonCoreMathProvider().format_citation(record) == common_core_math_matcher.format_citation(
         record
     )
+
+
+def test_providers_delegate_locate_topic():
+    assert NCICProvider().locate_topic(["이차함수"]) == ncic_matcher.locate_topic(["이차함수"])
+    assert CommonCoreMathProvider().locate_topic(["fraction"]) == common_core_math_matcher.locate_topic(["fraction"])

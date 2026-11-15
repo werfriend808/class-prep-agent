@@ -119,7 +119,9 @@ from __future__ import annotations
 import json
 import re
 
-from .llm import complete
+from .errors import GenerationError, run_with_one_retry, unavailable_error
+from .llm import LLMServiceError, complete
+from .usage import QuotaExceededError
 
 QUESTION_COUNT = 5
 MIN_OPTIONS = 2
@@ -220,8 +222,12 @@ def _try_eval_simple_expr(text: str) -> float | None:
     return None
 
 
-class QuizError(RuntimeError):
-    """퀴즈 생성 실패(크레딧 부족, 응답 파싱/검증 실패 등)를 UI에 알리기 위한 예외."""
+class QuizError(GenerationError):
+    """퀴즈 생성 실패(크레딧 부족, 응답 파싱/검증 실패 등)를 UI에 알리기 위한 예외.
+
+    2026-11-13: str(e)는 내부 사유(재시도 프롬프트/로그), 화면에는 e.user_message
+    (src/errors.py 참고). 검수 실패는 kind="review"로 구분한다.
+    """
 
 
 def _build_prompt(
@@ -489,25 +495,33 @@ def _verify_questions(subject: str, grade: str, topic: str, questions: list[dict
     invalid = [v for v in verdicts if not v.get("valid", True)]
     if invalid:
         reasons = " / ".join(str(v.get("reason", "")).strip() for v in invalid if v.get("reason"))
+        # 검수 LLM의 사유 문장은 재시도 프롬프트에만 쓴다(str(e)). 화면에는 errors.final_message의
+        # 정해진 문장이 나간다 — 판단 과정이 그대로 노출되던 문제(2026-11-13 데모) 때문.
         if locale == "us":
             raise QuizError(
                 f"Question review found a problem: "
-                f"{reasons or 'One or more questions have an incorrect answer or premise.'}"
+                f"{reasons or 'One or more questions have an incorrect answer or premise.'}",
+                kind="review",
             )
-        raise QuizError(f"문항 검수에서 문제가 발견됐어요: {reasons or '정답/전제가 정확하지 않은 문항이 있어요.'}")
+        raise QuizError(
+            f"문항 검수에서 문제가 발견됐어요: {reasons or '정답/전제가 정확하지 않은 문항이 있어요.'}",
+            kind="review",
+        )
 
 
 def _generate_once(subject: str, grade: str, topic: str, prompt: str, locale: str = "ko") -> dict:
     try:
         # 4000: lesson_plan.py와 같은 이유(긴 JSON이 한도에서 잘리는 문제)로 여유를 둔다.
         raw_text = complete(prompt, max_tokens=4000)
+    except (QuotaExceededError, LLMServiceError) as e:
+        raise unavailable_error(QuizError, e) from e  # 다시 불러도 같은 결과 — 재시도 안 함
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
         message = (
             f"Failed to generate the quiz (LLM call error): {e}"
             if locale == "us"
             else f"퀴즈 생성에 실패했어요 (LLM 호출 오류): {e}"
         )
-        raise QuizError(message) from e
+        raise QuizError(message, kind="service") from e
     result = _parse_quiz_json(raw_text, locale)
     _verify_questions(subject, grade, topic, result["questions"], locale)
     return result
@@ -559,14 +573,14 @@ def generate_quiz(
         else _build_prompt(subject, grade, topic, revision_request, current_questions)
     )
 
-    try:
-        result = _generate_once(subject, grade, topic, prompt, locale)
-    except QuizError as first_error:
+    def attempt(previous: QuizError | None) -> dict:
         # 재시도 때 같은 프롬프트를 그대로 보내면 모델이 같은 실수를 반복한다 — Haiku
         # 5.5 실사용에서 "보기 중 동치 분수" 검증에 두 번 연속 걸려 실패했다(2026-11-12).
-        # 거절 사유를 프롬프트 끝에 붙여서 무엇을 고쳐야 하는지 알려준다.
-        prompt = prompt + _retry_feedback(str(first_error), locale)
-        result = _generate_once(subject, grade, topic, prompt, locale)
+        # 거절 사유(str(previous), 내부 사유)를 프롬프트 끝에 붙여서 무엇을 고쳐야 하는지 알려준다.
+        p = prompt if previous is None else prompt + _retry_feedback(str(previous), locale)
+        return _generate_once(subject, grade, topic, p, locale)
+
+    result = run_with_one_retry(attempt, QuizError, "quiz", locale)
 
     result["subject"] = subject
     result["grade"] = grade

@@ -15,7 +15,9 @@ import json
 import re
 
 from .lesson_plan import _stringify_section
-from .llm import complete
+from .errors import GenerationError, run_with_one_retry, unavailable_error
+from .llm import LLMServiceError, complete
+from .usage import QuotaExceededError
 
 WORKSHEET_SECTIONS = [
     "활동_안내",
@@ -56,8 +58,8 @@ _SECTION_TITLES_US = {
 }
 
 
-class WorksheetError(RuntimeError):
-    """활동지 생성 실패를 UI에 알리기 위한 예외."""
+class WorksheetError(GenerationError):
+    """활동지 생성 실패를 UI에 알리기 위한 예외. str(e)는 내부 사유, 화면에는 e.user_message."""
 
 
 def _build_prompt(plan: dict, revision_request: str | None) -> str:
@@ -113,13 +115,15 @@ def _generate_once(prompt: str, locale: str = "ko") -> dict:
     try:
         # 4000: lesson_plan.py와 같은 이유(긴 JSON이 한도에서 잘리는 문제)로 여유를 둔다.
         raw_text = complete(prompt, max_tokens=4000)
+    except (QuotaExceededError, LLMServiceError) as e:
+        raise unavailable_error(WorksheetError, e) from e  # 다시 불러도 같은 결과 — 재시도 안 함
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
         message = (
             f"Failed to generate the student worksheet (LLM call error): {e}"
             if locale == "us"
             else f"학생 활동지 생성에 실패했어요 (LLM 호출 오류): {e}"
         )
-        raise WorksheetError(message) from e
+        raise WorksheetError(message, kind="service") from e
     return _parse_worksheet_json(raw_text, locale)
 
 
@@ -139,10 +143,9 @@ def generate_worksheet(plan: dict, revision_request: str | None = None, locale: 
     """
     prompt = _build_prompt_us(plan, revision_request) if locale == "us" else _build_prompt(plan, revision_request)
 
-    try:
-        worksheet = _generate_once(prompt, locale)
-    except WorksheetError:
-        worksheet = _generate_once(prompt, locale)
+    worksheet = run_with_one_retry(
+        lambda _previous: _generate_once(prompt, locale), WorksheetError, "worksheet", locale
+    )
 
     worksheet["topic"] = plan.get("topic", "")
     worksheet["subject"] = plan.get("subject", "")
@@ -174,7 +177,12 @@ def _parse_worksheet_json(raw_text: str, locale: str = "ko") -> dict:
             if locale == "us"
             else f"응답에 필요한 항목이 빠졌어요: {', '.join(missing)}"
         )
-        raise WorksheetError(message)
+        user_message = (
+            "Part of the worksheet was missing from the response. Please try again."
+            if locale == "us"
+            else "AI 응답에 활동지의 일부 항목이 빠져 있었어요. 다시 시도해주세요."
+        )
+        raise WorksheetError(message, user_message=user_message)
     return {k: _stringify_section(data[k]) for k in sections}
 
 

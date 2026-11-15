@@ -148,3 +148,29 @@ def available_subjects() -> list[str]:
         if s["subject"] not in seen:
             seen.append(s["subject"])
     return seen
+
+
+def locate_topic(keywords: list[str] | None, limit: int = 6) -> list[dict]:
+    """키워드가 학년 상관없이 데이터셋 어디에 나오는지 학년 라벨별 건수로 요약한다.
+
+    `ncic_matcher.locate_topic()`과 같은 계약(반환 필드도 같음). 전 학년 공통인
+    Mathematical Practice("K-12")는 "어느 학년 내용인가"를 알려주지 못하므로 뺀다.
+    과목이 Math 하나뿐이라 subject는 항상 "Math"다.
+    """
+    keywords = [kw.lower() for kw in (keywords or []) if kw]
+    if not keywords:
+        return []
+    counts: dict[tuple[str, str], list] = {}
+    for record in load_standards():
+        if record["grade"] == _UNIVERSAL_GRADE:
+            continue
+        text = record["text"].lower()
+        if any(kw in text for kw in keywords):
+            key = (record["subject"], record["grade"])
+            entry = counts.setdefault(key, [0, record["code"]])
+            entry[0] += 1
+    ranked = sorted(counts.items(), key=lambda item: item[1][0], reverse=True)
+    return [
+        {"subject": subject, "grade_group": grade_group, "count": count, "example_code": code}
+        for (subject, grade_group), (count, code) in ranked[:limit]
+    ]

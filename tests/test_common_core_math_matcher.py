@@ -118,3 +118,22 @@ def test_format_citation_includes_code_and_ccss_copyright_notice():
     assert "6.G.1" in citation
     assert "성취기준 텍스트" in citation
     assert "© Copyright 2010" in citation
+
+
+# --- locate_topic (2026-11-13) --------------------------------------------------
+from src.common_core_math_matcher import locate_topic  # noqa: E402
+
+
+def test_locate_topic_places_quadratic_functions_in_high_school_only():
+    locations = locate_topic(["quadratic", "functions"])
+    labels = {loc["grade_group"] for loc in locations}
+    assert "High School" in labels
+    assert "Grade 1" not in labels
+    assert "K-12" not in labels  # 전 학년 공통 Practice 기준은 근거에서 뺀다.
+
+
+def test_locate_topic_is_case_insensitive():
+    assert locate_topic(["Pythagorean"]) == locate_topic(["pythagorean"])
+    labels = {loc["grade_group"] for loc in locate_topic(["Pythagorean"])}
+    # Grade 8(피타고라스 정리)과 High School(Pythagorean identity, F-TF.8) 둘 다 나온다.
+    assert "Grade 8" in labels and "Grade 2" not in labels

@@ -40,7 +40,9 @@ import json
 import re
 
 from .curriculum import CurriculumProvider, get_provider
-from .llm import complete
+from .errors import GenerationError, run_with_one_retry, unavailable_error
+from .llm import LLMServiceError, complete
+from .usage import QuotaExceededError
 
 PLAN_SECTIONS = [
     "자료_개요",
@@ -67,8 +69,11 @@ PLAN_SECTIONS_US = [
 ]
 
 
-class LessonPlanError(RuntimeError):
-    """계획안 생성 실패(크레딧 부족, 응답 파싱 실패 등)를 UI에 알리기 위한 예외."""
+class LessonPlanError(GenerationError):
+    """계획안 생성 실패(크레딧 부족, 응답 파싱 실패 등)를 UI에 알리기 위한 예외.
+
+    2026-11-13: str(e)는 내부 사유, 화면에는 e.user_message (src/errors.py 참고).
+    """
 
 
 def extract_keywords(topic: str) -> list[str]:
@@ -79,6 +84,16 @@ def extract_keywords(topic: str) -> list[str]:
         if t not in seen:
             seen.append(t)
     return seen
+
+
+_SCHOOL_LEVELS = {"초": "초등학교", "중": "중학교", "고": "고등학교"}
+
+
+def _school_level(grade: str) -> str:
+    """"중2" -> "중학교 ". 2026-11-13: 프롬프트가 학년과 상관없이 "고등학교 {subject} 교사"로
+    고정돼 있어서 초1을 골라도 고등학교 교사 역할로 계획안을 쓰고 있었다."""
+    level = _SCHOOL_LEVELS.get((grade or "")[:1])
+    return f"{level} " if level else ""
 
 
 def _build_prompt(
@@ -96,7 +111,7 @@ def _build_prompt(
         else ""
     )
     return (
-        f"당신은 고등학교 {subject} 교사를 돕는 수업 설계 도우미입니다. "
+        f"당신은 {_school_level(grade)}{subject} 교사를 돕는 수업 설계 도우미입니다. "
         f"{grade} 학생 대상 토의·토론 수업계획안을 아래 조건에 맞춰 작성해주세요.\n\n"
         f"주제: {topic}\n\n"
         f"참고할 국가교육과정 성취기준(2022 개정):\n{ncic_context}\n\n"
@@ -141,13 +156,15 @@ def _generate_once(prompt: str, sections: list[str] = PLAN_SECTIONS, locale: str
         # 6번째 섹션(lesson_flow)에서 잘렸다(2026-11-12). 과금은 실제 생성한 만큼만이고
         # 호출 수 한도(usage.check_quota)는 그대로라 비용 상한은 유지된다.
         raw_text = complete(prompt, max_tokens=6000)
+    except (QuotaExceededError, LLMServiceError) as e:
+        raise unavailable_error(LessonPlanError, e) from e  # 다시 불러도 같은 결과 — 재시도 안 함
     except Exception as e:  # noqa: BLE001 — 크레딧 부족, 네트워크 오류 등 예상 밖 오류 포함
         message = (
             f"Failed to generate the lesson plan (LLM call error): {e}"
             if locale == "us"
             else f"수업계획안 생성에 실패했어요 (LLM 호출 오류): {e}"
         )
-        raise LessonPlanError(message) from e
+        raise LessonPlanError(message, kind="service") from e
     return _parse_plan_json(raw_text, sections, locale)
 
 
@@ -189,10 +206,9 @@ def generate_lesson_plan(
         prompt = _build_prompt(subject, grade, topic, records, revision_request)
         sections = PLAN_SECTIONS
 
-    try:
-        plan = _generate_once(prompt, sections, locale)
-    except LessonPlanError:
-        plan = _generate_once(prompt, sections, locale)
+    plan = run_with_one_retry(
+        lambda _previous: _generate_once(prompt, sections, locale), LessonPlanError, "lesson_plan", locale
+    )
 
     reference_key = "standards_references" if locale == "us" else "ncic_references"
     plan[reference_key] = [provider.format_citation(r) for r in records]
@@ -253,5 +269,11 @@ def _parse_plan_json(raw_text: str, sections: list[str] = PLAN_SECTIONS, locale:
             if locale == "us"
             else f"응답에 필요한 항목이 빠졌어요: {', '.join(missing)}"
         )
-        raise LessonPlanError(message)
+        # 내부 키 이름("수업_흐름")은 사유에만 남기고 화면에는 내보내지 않는다.
+        user_message = (
+            "Part of the lesson plan was missing from the response. Please try again."
+            if locale == "us"
+            else "AI 응답에 계획안의 일부 항목이 빠져 있었어요. 다시 시도해주세요."
+        )
+        raise LessonPlanError(message, user_message=user_message)
     return {k: _stringify_section(data[k]) for k in sections}

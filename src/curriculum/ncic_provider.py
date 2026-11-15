@@ -35,3 +35,6 @@ class NCICProvider(CurriculumProvider):
 
     def format_citation(self, record: dict) -> str:
         return ncic_matcher.format_citation(record)
+
+    def locate_topic(self, keywords: list[str] | None, limit: int = 6) -> list[dict]:
+        return ncic_matcher.locate_topic(keywords, limit=limit)

@@ -35,3 +35,6 @@ class CommonCoreMathProvider(CurriculumProvider):
 
     def format_citation(self, record: dict) -> str:
         return ccm.format_citation(record)
+
+    def locate_topic(self, keywords: list[str] | None, limit: int = 6) -> list[dict]:
+        return ccm.locate_topic(keywords, limit=limit)

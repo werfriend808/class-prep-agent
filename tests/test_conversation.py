@@ -195,3 +195,35 @@ def test_conversation_state_ko_locale_is_default_and_unaffected():
     conv = ConversationState()
     assert conv.locale == "ko"
     assert "과목" in conv.next_question()
+
+
+# --- 2026-11-14: 선택형 입력 폼 진입점 (start_from_form) ---
+
+def test_start_from_form_fills_slots_and_goes_ready():
+    conv = ConversationState()
+    reply = conv.start_from_form("사회", "중2", "  환경 보전과 개발  ")
+    assert conv.phase == Phase.READY
+    assert conv.slots == {"subject": "사회", "grade": "중2", "topic": "환경 보전과 개발"}
+    # 폼 입력 요약(user) + 생성 안내(assistant)가 대화 내역에 남는다.
+    assert conv.history[-2]["role"] == "user"
+    assert "중2" in conv.history[-2]["content"]
+    assert conv.history[-1] == {"role": "assistant", "content": reply}
+    assert "중2" in reply
+
+
+def test_start_from_form_us_locale_uses_english_text():
+    conv = ConversationState(locale="us")
+    reply = conv.start_from_form("Math", "8", "Linear functions")
+    assert conv.phase == Phase.READY
+    assert conv.slots["grade"] == "8"
+    assert "Grade 8" in reply
+
+
+def test_start_from_form_rejects_blank_topic():
+    import pytest
+
+    conv = ConversationState()
+    with pytest.raises(ValueError):
+        conv.start_from_form("사회", "중2", "   ")
+    assert conv.phase == Phase.COLLECTING
+    assert conv.slots == {}

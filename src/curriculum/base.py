@@ -72,3 +72,13 @@ class CurriculumProvider(ABC):
     @abstractmethod
     def format_citation(self, record: dict) -> str:
         """성취기준 레코드를 수업계획안/문서 본문에 넣을 인용 문자열로 변환한다."""
+
+    @abstractmethod
+    def locate_topic(self, keywords: list[str] | None, limit: int = 6) -> list[dict]:
+        """키워드가 과목/학년 상관없이 데이터셋 어디에 나오는지 위치별 건수로 요약한다.
+
+        반환: [{"subject", "grade_group", "count", "example_code"}] (count 내림차순).
+        `match_standards()`가 0건일 때 "다른 학년/과목에는 있는가"를 판단하는 근거로
+        쓴다(src/topic_check.py). grade_group은 `grade_groups_for()`가 돌려주는 것과
+        같은 데이터셋 라벨이다.
+        """

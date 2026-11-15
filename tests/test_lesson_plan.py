@@ -9,6 +9,8 @@ lesson_plan.py 입장에서는 complete(prompt, max_tokens) -> str 하나만 보
 """
 import json
 
+import pytest
+
 import src.lesson_plan as lesson_plan
 from src.curriculum import CurriculumProvider
 from src.lesson_plan import (
@@ -129,6 +131,9 @@ class _FakeProvider(CurriculumProvider):
 
     def format_citation(self, record):
         return f"인용:{record['code']}"
+
+    def locate_topic(self, keywords, limit=6):
+        return []
 
 
 def test_generate_lesson_plan_uses_injected_provider():
@@ -317,3 +322,15 @@ def test_korean_lesson_plan_uses_ncic_even_when_default_locale_is_us():
         curriculum.CURRICULUM_PROVIDER = original_default
 
     assert used["name"] == "ncic"
+
+
+@pytest.mark.parametrize(
+    ("grade", "expected"),
+    [("초1", "초등학교 수학 교사"), ("중2", "중학교 수학 교사"), ("고1", "고등학교 수학 교사"), ("기타", "당신은 수학 교사")],
+)
+def test_prompt_uses_school_level_of_the_selected_grade(grade, expected):
+    # 2026-11-13: 예전엔 학년과 상관없이 "고등학교 {subject} 교사"로 고정돼 있었다.
+    prompt = _build_prompt("수학", grade, "도형", [], None)
+    assert expected in prompt
+    if grade != "고1":
+        assert "고등학교" not in prompt

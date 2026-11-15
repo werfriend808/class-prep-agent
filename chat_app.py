@@ -13,8 +13,8 @@ Activity 선택 화면(스펙 필수 UI 요소) 하나에서 두 Activity를 고
     강사용 자료엔 필요하다고 판단해 폴백을 고쳐서 복원, README 13-7) -> 생성되는 즉시 Notion에
     자동 반영(notion_writer.py) -> 사용자가 원하면 버튼으로 학생 활동지 생성
     (worksheet.py) -> Google Docs에 자동 반영(google_docs_writer.py). 생성 후
-    채팅 수정 요청은 edit_propagation.classify_edit_target()으로 계획안/활동지
-    중 어느 쪽 얘기인지 구분해서 해당 문서만 갱신한다 — 활동지 관련 필드
+    채팅 수정 요청은 사용자가 고른 대상(계획안/활동지, 2026-11-14부터 라디오로
+    직접 선택)만 갱신한다 — 활동지 관련 필드
     (주제/과목/학년/토론 쟁점/수업 흐름)가 바뀌면 활동지도 자동으로 같이
     갱신된다(edit_propagation.worksheet_needs_update()).
 
@@ -47,12 +47,15 @@ from src import usage
 from src.config import DEMO_MODE, FEEDBACK_URL, LOCALE
 from src.conversation import ConversationState, Phase, QuizConversationState
 from src.curriculum import get_provider
-from src.edit_propagation import classify_edit_target, worksheet_needs_update
+from src.edit_propagation import worksheet_needs_update
 from src.forms_writer import FormsWriteError, create_quiz_form, replace_quiz_questions
 from src.google_docs_writer import GoogleDocsWriteError, create_and_write_doc, replace_doc_body
 from src.lesson_plan import LessonPlanError, generate_lesson_plan
+from src.llm import LLMServiceError
 from src.notion_writer import NotionWriteError, plan_to_markdown, save_lesson_plan_to_notion, update_lesson_plan_in_notion
 from src.quiz import QuizError, generate_quiz, quiz_to_markdown
+from src.topic_check import check_topic, format_message, grade_label
+from src.usage import QuotaExceededError
 from src.worksheet import WorksheetError, generate_worksheet, worksheet_to_text
 
 st.set_page_config(
@@ -274,7 +277,7 @@ def _sync_worksheet_if_needed(conv: ConversationState, old_plan: dict | None, pl
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        st.error(f"학생 활동지 재생성에 실패했어요: {e}")
+        _show_generation_error(e)
     except GoogleDocsWriteError as e:
         st.error(f"Google Docs 반영에 실패했어요: {e}")
     except Exception as e:  # noqa: BLE001
@@ -282,6 +285,80 @@ def _sync_worksheet_if_needed(conv: ConversationState, old_plan: dict | None, pl
     else:
         usage.log_event("worksheet_revised", activity="worksheet")
         conv.worksheet = new_worksheet
+
+
+# ============================================================
+# 과목·학년·주제 정합성 판정 (2026-11-13, src/topic_check.py)
+# ============================================================
+# 네 화면(토의·토론/Quiz x ko/us) 모두 READY에서 생성하기 직전에 한 번 판정한다.
+# 성취기준을 찾으면 LLM 없이 바로 통과하고, 못 찾으면 LLM 판정 1회 후 필요하면
+# CLARIFYING으로 되묻는다. 되묻기 문장은 topic_check.format_message() 템플릿이다.
+
+
+def _show_generation_error(e) -> None:
+    """생성 실패(LessonPlanError/WorksheetError/QuizError) 표시. 화면엔 사용자용 문장만,
+    내부 사유(검수 LLM의 판단 과정, 응답 키 이름 등)는 서버 로그에만 남긴다 — src/errors.py."""
+    print(f"[generation] {type(e).__name__}: {e}")
+    st.error(e.user_message)
+
+
+def _topic_gate(conv, locale: str) -> bool:
+    """생성해도 되면 True. 되묻기가 필요하면 상태를 CLARIFYING으로 바꾸고 다시 그린다."""
+    if conv.topic_checked:
+        return True
+    slots = conv.slots
+    try:
+        with st.spinner("Checking the topic..." if locale == "us" else "주제가 과목·학년에 맞는지 확인하는 중..."):
+            check = check_topic(slots["subject"], slots["grade"], slots["topic"], locale=locale)
+    except (QuotaExceededError, LLMServiceError) as e:
+        # 판정을 못 하는 상황이면 생성도 같은 이유로 실패한다 — 바로 알린다.
+        st.error(str(e))
+        return False
+    if check.needs_clarification:
+        conv.request_clarification(format_message(check, locale), check)
+        st.rerun()
+    conv.mark_topic_checked(check)
+    return True
+
+
+def _render_clarification_actions(conv, locale: str, key_prefix: str) -> None:
+    """되묻기 메시지 아래에 추천 학년/과목/주제 버튼과 '그대로 만들기' 버튼을 보여준다."""
+    check = conv.topic_check
+    is_us = locale == "us"
+    actions: list[tuple[str, str, str]] = []  # (버튼 라벨, 슬롯, 값)
+    if getattr(check, "suggested_grade", None):
+        label = grade_label(check.suggested_grade, locale)
+        actions.append((f"Switch to {label}" if is_us else f"{label}으로 바꾸기", "grade", check.suggested_grade))
+    if getattr(check, "suggested_subject", None):
+        subject = check.suggested_subject
+        actions.append((f"Switch to {subject}" if is_us else f"{subject} 과목으로 바꾸기", "subject", subject))
+    for topic in getattr(check, "narrower_topics", None) or []:
+        actions.append((f"Topic: {topic}" if is_us else f"주제: {topic}", "topic", topic))
+
+    for i, (label, slot, value) in enumerate(actions):
+        if st.button(label, key=f"{key_prefix}_clarify_{i}"):
+            conv.history.append({"role": "user", "content": label})
+            conv.change_slot(slot, value)
+            if slot == "topic":
+                # 판정 LLM이 "이 과목·학년에 맞게 좁힌 주제"로 직접 준 값이라 다시 판정하지
+                # 않는다 — 재판정하면 호출 1회를 더 쓰고, 같은 되묻기가 반복될 수 있다.
+                # 학년/과목 버튼은 다시 판정한다(성취기준이 있으면 LLM 없이 통과).
+                conv.mark_topic_checked()
+            st.rerun()
+    as_is = "Use as entered" if is_us else "그대로 만들기"
+    if st.button(as_is, key=f"{key_prefix}_clarify_as_is"):
+        conv.history.append({"role": "user", "content": as_is})
+        conv.accept_as_is()
+        st.rerun()
+
+
+def _unmatched_notice(locale: str) -> str:
+    if locale == "us":
+        return (
+            "No Common Core standard matched this topic, so this plan was written without a "
+            "standards reference."
+        )
+    return "이 주제와 연결된 성취기준을 찾지 못해서, 성취기준 근거 없이 작성된 계획안이에요."
 
 
 def _run_generation(conv: ConversationState, revision_request: str | None = None) -> bool:
@@ -304,7 +381,7 @@ def _run_generation(conv: ConversationState, revision_request: str | None = None
             )
     except LessonPlanError as e:
         usage.log_event("generation_failed", activity="lesson_plan")
-        st.error(str(e))
+        _show_generation_error(e)
         if old_plan is not None:
             # 수정 시도가 실패한 거라면 이전 초안으로 되돌아가서 다시 보여준다.
             conv.phase = Phase.DRAFTED
@@ -348,7 +425,8 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        conv.history.append({"role": "assistant", "content": str(e)})
+        print(f"[generation] {type(e).__name__}: {e}")
+        conv.history.append({"role": "assistant", "content": e.user_message})
     except GoogleDocsWriteError as e:
         conv.history.append({"role": "assistant", "content": f"Google Docs 반영에 실패했어요: {e}"})
     except Exception as e:  # noqa: BLE001
@@ -365,26 +443,84 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
     return True
 
 
+# 2026-11-14: 토의·토론 입력 폼. 과목·학년은 값의 범위가 정해져 있어 선택형으로
+# 받고(데이터셋 표기 그대로 넘겨서 정규식 추출·재질문·DEFAULT_GRADE 폴백을 건너뜀),
+# 범위가 열린 주제만 자유 입력으로 둔다. 학년을 학교급/학년 두 칸으로 나누지 않은
+# 이유: st.form 안의 위젯은 제출 전까지 서로 반응하지 않아서, 학교급을 바꿔도
+# 학년 선택지(초 1~6 / 중·고 1~3)가 따라 바뀌지 않는다.
+# 수정 대상 선택(2026-11-14). 위젯 키 / 제출 시점에 옮겨두는 값 / 다음에 기본으로 보여줄 마지막 선택.
+EDIT_TARGET_KEY = "discussion_edit_target"
+EDIT_TARGET_PENDING_KEY = "discussion_edit_target_pending"
+EDIT_TARGET_LAST_KEY = "discussion_edit_target_last"
+
+GRADE_OPTIONS_KO = [f"{level}{n}" for level, top in (("초", 6), ("중", 3), ("고", 3)) for n in range(1, top + 1)]
+
+
+def _render_input_form(conv, *, locale: str, key_prefix: str, topic_label: str,
+                       topic_placeholder: str, submit_label: str) -> None:
+    """토의·토론·Quiz 공통 입력 폼 (2026-11-14). 두 Activity 모두 과목/학년/주제 슬롯이 같아서
+    라벨과 위젯 키만 바꿔 하나로 쓴다. 키는 f"{key_prefix}_form_subject" (+ US는 "_us")."""
+    is_us = locale == "us"
+    sfx = "_us" if is_us else ""
+    subjects = get_provider("common_core_math" if is_us else "ncic").subjects()
+    grades = GRADE_OPTIONS_US if is_us else GRADE_OPTIONS_KO
+    with st.form(f"{key_prefix}_form{sfx}"):
+        subject = st.selectbox(
+            "Subject" if is_us else "과목", subjects, index=0 if len(subjects) == 1 else None,
+            placeholder="Choose a subject" if is_us else "과목을 고르세요",
+            key=f"{key_prefix}_form_subject{sfx}",
+        )
+        grade = st.selectbox(
+            "Grade" if is_us else "학년", grades, index=None, format_func=lambda g: grade_label(g, locale),
+            placeholder="Choose a grade" if is_us else "학년을 고르세요",
+            key=f"{key_prefix}_form_grade{sfx}",
+        )
+        topic = st.text_input(topic_label, placeholder=topic_placeholder, key=f"{key_prefix}_form_topic{sfx}")
+        submitted = st.form_submit_button(submit_label)
+    if submitted:
+        if not subject or not grade or not topic.strip():
+            st.warning("Please fill in the subject, grade, and topic." if is_us else "과목, 학년, 주제를 모두 입력해주세요.")
+            return
+        conv.start_from_form(subject, grade, topic)
+        st.rerun()
+
+
+def _render_discussion_form() -> None:
+    _render_input_form(
+        st.session_state.conv, locale="ko", key_prefix="discussion",
+        topic_label="토의·토론 주제", topic_placeholder="예: 환경 보전과 개발 중 무엇을 우선해야 하는가",
+        submit_label="수업계획안 만들기",
+    )
+
+
 def _render_discussion_activity() -> None:
     if "conv" not in st.session_state:
         st.session_state.conv = ConversationState()
-        st.session_state.conv.history.append(
-            {"role": "assistant", "content": st.session_state.conv.next_question()}
-        )
     conv: ConversationState = st.session_state.conv
 
     st.caption(
-        f"과목({', '.join(get_provider('ncic').subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
-        "근거한 토의·토론 수업계획안을 만들고 Notion에 자동으로 저장해드려요. 생성 후에도 채팅으로 "
-        "계속 수정을 요청할 수 있고, 원하면 학생 활동지도 만들어서 Google Docs에 저장할 수 있어요."
+        "과목, 학년, 주제를 정하면 국가교육과정(NCIC) 성취기준에 근거한 토의·토론 수업계획안을 "
+        "만들고 Notion에 자동으로 저장해드려요. 생성 후에는 채팅으로 계속 수정을 요청할 수 있고, "
+        "원하면 학생 활동지도 만들어서 Google Docs에 저장할 수 있어요."
     )
 
     for msg in conv.history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
+    # 입력 단계(COLLECTING)는 폼으로 받고, 채팅창은 되묻기(CLARIFYING)와 수정 단계에서만 쓴다.
+    if conv.phase == Phase.COLLECTING:
+        _render_discussion_form()
+        return
+
     user_input = st.chat_input("메시지를 입력하세요", key="discussion_chat_input")
     if user_input:
+        if conv.phase == Phase.DRAFTED:
+            # 2026-11-14: 수정 대상을 사용자가 고른 값으로 정한다. 라디오 위젯은
+            # REVISING 단계에선 그려지지 않아 상태가 사라지므로, 제출 시점에 따로 옮겨둔다.
+            target = st.session_state.get(EDIT_TARGET_KEY, "plan") if _has_worksheet(conv) else "plan"
+            st.session_state[EDIT_TARGET_PENDING_KEY] = target
+            st.session_state[EDIT_TARGET_LAST_KEY] = target
         with st.chat_message("user"):
             st.write(user_input)
         reply = conv.handle_message(user_input)
@@ -393,15 +529,20 @@ def _render_discussion_activity() -> None:
         st.rerun()
 
     # --- READY: 슬롯이 다 채워졌으면 자동으로 생성 트리거 ---
-    if conv.phase == Phase.READY:
+    if conv.phase == Phase.READY and _topic_gate(conv, "ko"):
         if _run_generation(conv):
             st.rerun()
+
+    if conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(conv, "ko", "discussion")
 
     # --- REVISING: 계획안 수정인지 활동지 수정인지 구분해서 처리 ---
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        target = classify_edit_target(revision_request, has_worksheet=_has_worksheet(conv))
-        if target == "worksheet":
+        # 2026-11-14: 예전 키워드 추측(edit_propagation.classify_edit_target, 삭제됨) 대신 사용자가 고른 대상을 쓴다.
+        # "질문을 쉽게 바꿔줘"처럼 '활동지'라는 단어 없이 활동지를 말하는 경우를 놓치지 않게.
+        target = st.session_state.pop(EDIT_TARGET_PENDING_KEY, "plan")
+        if target == "worksheet" and _has_worksheet(conv):
             if _run_worksheet_revision(conv, revision_request):
                 st.rerun()
         elif _run_generation(conv, revision_request=revision_request):
@@ -421,6 +562,8 @@ def _render_discussion_activity() -> None:
             with st.expander("NCIC 교육과정 근거", expanded=False):
                 for ref in plan["ncic_references"]:
                     st.write(f"- {ref}")
+        else:
+            st.info(_unmatched_notice("ko"))
 
         st.download_button(
             "계획안 다운로드 (.md)",
@@ -457,7 +600,7 @@ def _render_discussion_activity() -> None:
                             )
                 except WorksheetError as e:
                     usage.log_event("generation_failed", activity="worksheet")
-                    st.error(str(e))
+                    _show_generation_error(e)
                 except GoogleDocsWriteError as e:
                     st.error(str(e))
                 except Exception as e:  # noqa: BLE001
@@ -491,19 +634,28 @@ def _render_discussion_activity() -> None:
         st.divider()
         if st.button("새로 만들기", key="reset"):
             conv.reset()
-            conv.history.append({"role": "assistant", "content": conv.next_question()})
+            conv.history = []  # 폼으로 다시 시작하므로 이전 대화는 지운다
+            st.session_state.pop(EDIT_TARGET_LAST_KEY, None)
             st.rerun()
 
+        if _has_worksheet(conv):
+            st.radio(
+                "채팅 수정 요청을 어디에 반영할까요?",
+                ["plan", "worksheet"],
+                index=1 if st.session_state.get(EDIT_TARGET_LAST_KEY) == "worksheet" else 0,
+                format_func=lambda t: "수업계획안" if t == "plan" else "학생 활동지",
+                horizontal=True,
+                key=EDIT_TARGET_KEY,
+            )
         st.caption(
-            "수정하고 싶은 점이 있으면 위 채팅창에 자유롭게 적어주세요 (예: '토론 쟁점을 3개로 줄여줘', "
+            "수정하고 싶은 점이 있으면 아래 채팅창에 자유롭게 적어주세요 (예: '토론 쟁점을 3개로 줄여줘', "
             "'토론 시간을 20분으로 늘려줘'). "
             + (
-                "활동지에 영향 있는 수정이면 학생 활동지도 자동으로 다시 만들어져요. "
+                "계획안을 고쳤을 때 활동지에 영향이 있으면 학생 활동지도 자동으로 다시 만들어져요. "
                 if DEMO_MODE
                 else "계획안 수정 결과는 Notion에, 활동지에 영향 있는 수정이면 학생 활동지(Google Docs)에도 자동으로 반영돼요. "
             )
-            + "'활동지 난이도를 낮춰줘'처럼 메시지에 "
-            "'활동지'가 들어가면 계획안은 그대로 두고 활동지만 수정해요."
+            + ("'학생 활동지'를 고르면 계획안은 그대로 두고 활동지만 수정해요." if _has_worksheet(conv) else "")
         )
 
 
@@ -530,7 +682,7 @@ def _sync_worksheet_if_needed_us(conv: ConversationState, old_plan: dict | None,
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        st.error(f"Failed to regenerate the student worksheet: {e}")
+        _show_generation_error(e)
     except GoogleDocsWriteError as e:
         st.error(f"Failed to update Google Docs: {e}")
     except Exception as e:  # noqa: BLE001
@@ -559,7 +711,7 @@ def _run_generation_us(conv: ConversationState, revision_request: str | None = N
             )
     except LessonPlanError as e:
         usage.log_event("generation_failed", activity="lesson_plan")
-        st.error(str(e))
+        _show_generation_error(e)
         if conv.draft is not None:
             conv.phase = Phase.DRAFTED
         return False
@@ -593,7 +745,8 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
                 replace_doc_body(conv.worksheet_doc_id, worksheet_to_text(new_worksheet))
     except WorksheetError as e:
         usage.log_event("generation_failed", activity="worksheet")
-        conv.history.append({"role": "assistant", "content": str(e)})
+        print(f"[generation] {type(e).__name__}: {e}")
+        conv.history.append({"role": "assistant", "content": e.user_message})
     except GoogleDocsWriteError as e:
         conv.history.append({"role": "assistant", "content": f"Failed to update Google Docs: {e}"})
     except Exception as e:  # noqa: BLE001
@@ -610,17 +763,31 @@ def _run_worksheet_revision_us(conv: ConversationState, revision_request: str) -
     return True
 
 
+# 2026-11-14: US 입력 폼 — 한국어 _render_discussion_form()과 같은 이유로 과목·학년은
+# 선택형, 주제만 자유 입력. 학년 값은 common_core_math_matcher가 바로 알아듣는
+# "K", "1"~"12" 그대로 넘긴다. 과목이 하나(Math)뿐이면 미리 골라둔다.
+GRADE_OPTIONS_US = ["K"] + [str(n) for n in range(1, 13)]
+EDIT_TARGET_KEY_US = "discussion_edit_target_us"
+EDIT_TARGET_PENDING_KEY_US = "discussion_edit_target_pending_us"
+EDIT_TARGET_LAST_KEY_US = "discussion_edit_target_last_us"
+
+
+def _render_discussion_form_us() -> None:
+    _render_input_form(
+        st.session_state.conv_us, locale="us", key_prefix="discussion",
+        topic_label="Discussion topic", topic_placeholder="e.g. Is it fair to round numbers when splitting a bill?",
+        submit_label="Create lesson plan",
+    )
+
+
 def _render_discussion_activity_us() -> None:
     if "conv_us" not in st.session_state:
         st.session_state.conv_us = ConversationState(locale="us")
-        st.session_state.conv_us.history.append(
-            {"role": "assistant", "content": st.session_state.conv_us.next_question()}
-        )
     conv: ConversationState = st.session_state.conv_us
 
     st.caption(
-        f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and topic, "
-        "and I'll put together a discussion-based lesson plan grounded in Common Core standards"
+        "Pick a subject, grade, and topic, and I'll put together a discussion-based lesson plan "
+        "grounded in Common Core standards"
         + (". " if DEMO_MODE else " and save it to Notion. ")
         + "After it's generated, you can keep asking for revisions in the chat, and you can also "
         "generate a matching student worksheet."
@@ -630,8 +797,18 @@ def _render_discussion_activity_us() -> None:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
+    # 입력 단계(COLLECTING)는 폼으로 받고, 채팅창은 되묻기(CLARIFYING)와 수정 단계에서만 쓴다.
+    if conv.phase == Phase.COLLECTING:
+        _render_discussion_form_us()
+        return
+
     user_input = st.chat_input("Type a message", key="discussion_chat_input_us")
     if user_input:
+        if conv.phase == Phase.DRAFTED:
+            # 한국어 버전과 같은 이유: 라디오는 REVISING 단계에서 안 그려져 값이 사라지므로 제출 시점에 옮겨둔다.
+            target = st.session_state.get(EDIT_TARGET_KEY_US, "plan") if _has_worksheet(conv) else "plan"
+            st.session_state[EDIT_TARGET_PENDING_KEY_US] = target
+            st.session_state[EDIT_TARGET_LAST_KEY_US] = target
         with st.chat_message("user"):
             st.write(user_input)
         reply = conv.handle_message(user_input)
@@ -639,14 +816,17 @@ def _render_discussion_activity_us() -> None:
             st.write(reply)
         st.rerun()
 
-    if conv.phase == Phase.READY:
+    if conv.phase == Phase.READY and _topic_gate(conv, "us"):
         if _run_generation_us(conv):
             st.rerun()
 
+    if conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(conv, "us", "discussion_us")
+
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        target = classify_edit_target(revision_request, has_worksheet=_has_worksheet(conv), locale="us")
-        if target == "worksheet":
+        target = st.session_state.pop(EDIT_TARGET_PENDING_KEY_US, "plan")
+        if target == "worksheet" and _has_worksheet(conv):
             if _run_worksheet_revision_us(conv, revision_request):
                 st.rerun()
         elif _run_generation_us(conv, revision_request=revision_request):
@@ -665,6 +845,8 @@ def _render_discussion_activity_us() -> None:
             with st.expander("Common Core Standards", expanded=False):
                 for ref in plan["standards_references"]:
                     st.write(f"- {ref}")
+        else:
+            st.info(_unmatched_notice("us"))
 
         st.download_button(
             "Download lesson plan (.md)",
@@ -701,7 +883,7 @@ def _render_discussion_activity_us() -> None:
                             )
                 except WorksheetError as e:
                     usage.log_event("generation_failed", activity="worksheet")
-                    st.error(str(e))
+                    _show_generation_error(e)
                 except GoogleDocsWriteError as e:
                     st.error(str(e))
                 except Exception as e:  # noqa: BLE001
@@ -735,11 +917,21 @@ def _render_discussion_activity_us() -> None:
         st.divider()
         if st.button("Start over", key="reset_us"):
             conv.reset()
-            conv.history.append({"role": "assistant", "content": conv.next_question()})
+            conv.history = []  # back to the form, so clear the old conversation
+            st.session_state.pop(EDIT_TARGET_LAST_KEY_US, None)
             st.rerun()
 
+        if _has_worksheet(conv):
+            st.radio(
+                "Apply chat revisions to:",
+                ["plan", "worksheet"],
+                index=1 if st.session_state.get(EDIT_TARGET_LAST_KEY_US) == "worksheet" else 0,
+                format_func=lambda t: "Lesson plan" if t == "plan" else "Student worksheet",
+                horizontal=True,
+                key=EDIT_TARGET_KEY_US,
+            )
         st.caption(
-            "Type any revision requests in the chat above (e.g. 'shorten the discussion issues to "
+            "Type any revision requests in the chat below (e.g. 'shorten the discussion issues to "
             "3 items', 'make the lesson flow fit a 30-minute class'). "
             + (
                 "If a revision affects the worksheet, the worksheet is regenerated too. "
@@ -747,8 +939,11 @@ def _render_discussion_activity_us() -> None:
                 else "Revisions are saved back to the same Notion page, and if they affect the worksheet, "
                 "the worksheet is regenerated too. "
             )
-            + 
-            "Mention 'worksheet' in your message to edit only the worksheet and leave the lesson plan as is."
+            + (
+                "Choose 'Student worksheet' to edit only the worksheet and leave the lesson plan as is."
+                if _has_worksheet(conv)
+                else ""
+            )
         )
 
 
@@ -797,7 +992,7 @@ def _run_quiz_generation(quiz_conv: QuizConversationState, revision_request: str
             )
     except QuizError as e:
         usage.log_event("generation_failed", activity="quiz")
-        st.error(str(e))
+        _show_generation_error(e)
         if old_draft is not None:
             quiz_conv.phase = Phase.DRAFTED
         return False
@@ -811,13 +1006,10 @@ def _run_quiz_generation(quiz_conv: QuizConversationState, revision_request: str
 def _render_quiz_activity() -> None:
     if "quiz_conv" not in st.session_state:
         st.session_state.quiz_conv = QuizConversationState()
-        st.session_state.quiz_conv.history.append(
-            {"role": "assistant", "content": st.session_state.quiz_conv.next_question()}
-        )
     quiz_conv: QuizConversationState = st.session_state.quiz_conv
 
     st.caption(
-        f"과목({', '.join(get_provider('ncic').subjects())}), 학년, 확인하고 싶은 단원/주제를 알려주시면 "
+        "과목, 학년, 확인하고 싶은 단원/주제를 정하면 "
         "객관식 퀴즈(기본 4지선다, 보기 개수는 채팅으로 조정 가능)를 만들고 Google Forms에 "
         "자동으로 저장해드려요(정답 자동 채점 포함). 생성 후에도 채팅으로 계속 수정을 요청할 수 있어요."
     )
@@ -825,6 +1017,15 @@ def _render_quiz_activity() -> None:
     for msg in quiz_conv.history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+
+    # 2026-11-14: 토의·토론과 같이 입력 단계는 폼, 채팅은 되묻기·수정 단계에서만.
+    if quiz_conv.phase == Phase.COLLECTING:
+        _render_input_form(
+            quiz_conv, locale="ko", key_prefix="quiz",
+            topic_label="단원 / 주제", topic_placeholder="예: 삼각형의 내각, 광합성",
+            submit_label="퀴즈 만들기",
+        )
+        return
 
     user_input = st.chat_input("메시지를 입력하세요", key="quiz_chat_input")
     if user_input:
@@ -835,9 +1036,12 @@ def _render_quiz_activity() -> None:
             st.write(reply)
         st.rerun()
 
-    if quiz_conv.phase == Phase.READY:
+    if quiz_conv.phase == Phase.READY and _topic_gate(quiz_conv, "ko"):
         if _run_quiz_generation(quiz_conv):
             st.rerun()
+
+    if quiz_conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(quiz_conv, "ko", "quiz")
 
     if quiz_conv.phase == Phase.REVISING:
         if _run_quiz_generation(quiz_conv, revision_request=quiz_conv.slots.get("revision_request")):
@@ -877,7 +1081,7 @@ def _render_quiz_activity() -> None:
         st.divider()
         if st.button("새로 만들기", key="quiz_reset"):
             quiz_conv.reset()
-            quiz_conv.history.append({"role": "assistant", "content": quiz_conv.next_question()})
+            quiz_conv.history = []  # 폼으로 다시 시작하므로 이전 대화는 지운다
             st.rerun()
 
         st.caption(
@@ -930,7 +1134,7 @@ def _run_quiz_generation_us(quiz_conv: QuizConversationState, revision_request: 
             )
     except QuizError as e:
         usage.log_event("generation_failed", activity="quiz")
-        st.error(str(e))
+        _show_generation_error(e)
         if old_draft is not None:
             quiz_conv.phase = Phase.DRAFTED
         return False
@@ -944,14 +1148,10 @@ def _run_quiz_generation_us(quiz_conv: QuizConversationState, revision_request: 
 def _render_quiz_activity_us() -> None:
     if "quiz_conv_us" not in st.session_state:
         st.session_state.quiz_conv_us = QuizConversationState(locale="us")
-        st.session_state.quiz_conv_us.history.append(
-            {"role": "assistant", "content": st.session_state.quiz_conv_us.next_question()}
-        )
     quiz_conv: QuizConversationState = st.session_state.quiz_conv_us
 
     st.caption(
-        f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and the "
-        "unit/topic you want to check, and I'll build a multiple-choice quiz (4 options by default, "
+        "Pick a subject and grade and enter the unit/topic you want to check, and I'll build a multiple-choice quiz (4 options by default, "
         "adjustable via chat)"
         + (" with an answer key you can download. " if DEMO_MODE else " and save it to Google Forms with auto-grading. ")
         + "You can keep asking for revisions in the chat after it's generated."
@@ -960,6 +1160,14 @@ def _render_quiz_activity_us() -> None:
     for msg in quiz_conv.history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+
+    if quiz_conv.phase == Phase.COLLECTING:
+        _render_input_form(
+            quiz_conv, locale="us", key_prefix="quiz",
+            topic_label="Unit / topic", topic_placeholder="e.g. adding fractions, area of triangles",
+            submit_label="Create quiz",
+        )
+        return
 
     user_input = st.chat_input("Type a message", key="quiz_chat_input_us")
     if user_input:
@@ -970,9 +1178,12 @@ def _render_quiz_activity_us() -> None:
             st.write(reply)
         st.rerun()
 
-    if quiz_conv.phase == Phase.READY:
+    if quiz_conv.phase == Phase.READY and _topic_gate(quiz_conv, "us"):
         if _run_quiz_generation_us(quiz_conv):
             st.rerun()
+
+    if quiz_conv.phase == Phase.CLARIFYING:
+        _render_clarification_actions(quiz_conv, "us", "quiz_us")
 
     if quiz_conv.phase == Phase.REVISING:
         if _run_quiz_generation_us(quiz_conv, revision_request=quiz_conv.slots.get("revision_request")):
@@ -1012,7 +1223,7 @@ def _render_quiz_activity_us() -> None:
         st.divider()
         if st.button("Start over", key="quiz_reset_us"):
             quiz_conv.reset()
-            quiz_conv.history.append({"role": "assistant", "content": quiz_conv.next_question()})
+            quiz_conv.history = []  # back to the form, so clear the old conversation
             st.rerun()
 
         st.caption(
