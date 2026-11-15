@@ -228,6 +228,8 @@ chat_app.py (Streamlit)          ──▶  채팅 UI + 초안 표시, 생성/�
 
 이 방식을 택한 이유는 정보 수집 단계를 규칙 기반으로 처리할 수 있어 LLM 크레딧 없이도 대화 흐름 자체는 끝까지 테스트할 수 있었기 때문입니다 (실제 "생성" 한 걸음만 LLM 호출이 필요).
 
+> 2026-11-14 변경: 토의·토론은 과목·학년·주제를 채팅 대신 입력 폼으로 한 번에 받습니다. 채팅은 되묻기와 수정 단계에서만 씁니다(27번). Quiz는 아직 이 절의 채팅 방식 그대로입니다.
+
 ### 8-5. LLM provider 전환: Claude ↔ 네이버 클로바 스튜디오
 
 Claude 크레딧 없이 실제 생성 결과를 검증하기 위해, LLM을 쓰는 모든 기능(실전 1의 요약 `summarizer.py` + 질의분류 `query_router.py`, 실전 2의 계획안 생성 `lesson_plan.py`)이 `src/llm.py`의 `complete(prompt, max_tokens)` 하나만 거치도록 통일했습니다. `.env`의 `LLM_PROVIDER=clova` + `HCX_API_KEY`를 설정하면 이 세 기능 전부 네이버 클로바 스튜디오(HyperCLOVA X)로 요청을 보내고, 비워두면(기본값 `anthropic`) Claude API로 보냅니다. 처음엔 `lesson_plan.py`만 provider를 바꿔 쓰도록 좁게 만들었지만, 이후 실전 1도 같은 클로바 키 하나로 크레딧 없이 전부 검증할 수 있도록 범위를 넓혔습니다.
@@ -332,6 +334,8 @@ python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없�
 
 ### 13-3-1. 수정 대상 분류: 계획안 vs 활동지
 
+> 2026-11-14 변경: 아래 키워드 분류(`classify_edit_target()`)는 사용자가 수정 대상을 직접 고르는 방식으로 대체되었고, 함수는 삭제했습니다(27-3, 27-4). 이 절은 개발 기록으로 남겨둡니다.
+
 13-3의 설명은 "이 메시지는 계획안 수정 요청"이라고 이미 정해진 다음 얘기입니다. 그런데 실제로는 채팅 메시지가 계획안 얘기("토론 시간을 20분으로")일 수도, 활동지 얘기("활동지 난이도를 낮춰줘")일 수도 있습니다. 처음 버전에서는 이 구분이 아예 없어서 활동지를 겨냥한 요청도 전부 계획안 재생성 프롬프트로 들어갔는데(README 15번에 한계로 적어뒀던 부분), `edit_propagation.classify_edit_target()`을 추가해 메워뒀습니다.
 
 - 메시지에 "활동지"/"학생 활동"/"워크시트"/"활동 자료" 키워드가 있고, 활동지가 이미 만들어져 있으면 → 활동지 수정으로 분류하고 `worksheet.generate_worksheet(plan, revision_request=메시지)`만 다시 호출해 Google Docs에 반영합니다. 계획안/Notion은 건드리지 않습니다.
@@ -349,10 +353,10 @@ python -m streamlit run chat_app.py   # Windows에서 streamlit이 PATH에 없�
 
 | 사용자 행동 | 호출되는 것 |
 |---|---|
-| 슬롯(과목/학년/주제) 다 채움 | `lesson_plan.generate_lesson_plan()` → `notion_writer.save_lesson_plan_to_notion()` |
+| 슬롯(과목/학년/주제) 다 채움 (2026-11-14부터 입력 폼 제출) | `lesson_plan.generate_lesson_plan()` → `notion_writer.save_lesson_plan_to_notion()` |
 | "활동지도 만들기" 버튼 | `worksheet.generate_worksheet()` → `google_docs_writer.create_and_write_doc()` |
-| 채팅 수정 요청 (계획안 대상, `classify_edit_target()`이 "plan" 판정) | `lesson_plan.generate_lesson_plan(revision_request=...)` → `notion_writer.update_lesson_plan_in_notion()` → (활동지 존재 + 관련 필드 변경 시) `worksheet.generate_worksheet()` → `google_docs_writer.replace_doc_body()` |
-| 채팅 수정 요청 (활동지 대상, `classify_edit_target()`이 "worksheet" 판정) | `worksheet.generate_worksheet(plan, revision_request=...)` → `google_docs_writer.replace_doc_body()` (계획안/Notion 미변경) |
+| 채팅 수정 요청 (계획안 대상 — 2026-11-14부터 사용자가 [수업계획안] 선택, 이전엔 `classify_edit_target()`이 "plan" 판정) | `lesson_plan.generate_lesson_plan(revision_request=...)` → `notion_writer.update_lesson_plan_in_notion()` → (활동지 존재 + 관련 필드 변경 시) `worksheet.generate_worksheet()` → `google_docs_writer.replace_doc_body()` |
+| 채팅 수정 요청 (활동지 대상 — 2026-11-14부터 사용자가 [학생 활동지] 선택, 이전엔 `classify_edit_target()`이 "worksheet" 판정) | `worksheet.generate_worksheet(plan, revision_request=...)` → `google_docs_writer.replace_doc_body()` (계획안/Notion 미변경) |
 
 ### 13-6. LLM 응답 형식 불안정성: 실패 시 자동 재시도 1회
 
@@ -400,7 +404,7 @@ tests/
 ## 15. 알려진 제한사항
 
 - **PBL Activity는 미구현입니다.** 과제 스펙이 "최소 1개 이상 완성도 있게 구현"을 권장해서, 토의·토론 Activity를 생성+수정+외부 서비스 반영까지 끝까지 완성한 뒤 Quiz Activity(16번)를 추가로 완성하는 쪽을 택했고, PBL은 손대지 않았습니다.
-- **수정 대상 분류(계획안 vs 활동지, 13-3-1 참고)가 키워드 매칭이라 거칩니다.** "활동지"/"학생 활동"/"워크시트"/"활동 자료" 키워드로만 판단해서, 두 대상을 한 메시지에 같이 언급하면("쟁점도 줄이고 활동지 질문도 줄여줘") 활동지 쪽으로만 분류되고 계획안 쪽 요청은 무시됩니다. 메시지를 한 번에 하나의 대상만 겨냥하도록 쓰면(현재 UI 안내 문구가 이렇게 유도합니다) 문제없이 동작합니다.
+- ~~**수정 대상 분류(계획안 vs 활동지, 13-3-1 참고)가 키워드 매칭이라 거칩니다.**~~ → 2026-11-14 해결: 사용자가 수정 대상을 직접 고릅니다(27-3). 남은 한계는 **한 번의 수정 요청이 계획안과 활동지를 동시에 겨냥할 수 없다**는 점입니다. 다만 계획안 수정이 활동지가 읽는 필드(토론 쟁점, 수업 흐름 등)를 바꾸면 활동지는 지금도 자동으로 다시 만들어집니다(13-3).
 - **Google Docs 활동지는 서식이 없는 순수 텍스트입니다.** Docs API의 `insertText`가 마크다운을 렌더링하지 않아서, 제목/구분선을 굵게·크게 표시하는 등의 서식(`updateTextStyle` 등 추가 batchUpdate 요청)은 아직 넣지 않았습니다.
 - Google Docs 연동은 실전 1·2의 "크레딧 없이 개발" 방침과 별개로 **본인 Google 계정의 OAuth 인증과 Drive 저장 공간**이 필요합니다(12번 참고) — 비용은 들지 않지만 계정 설정이 한 단계 더 필요합니다.
 
@@ -789,6 +793,49 @@ src/common_core_math_matcher.py   # ncic_matcher.py와 대응되는 매칭 유�
 - 매칭은 되는데 넓은 주제(US Grade 9 "algebra")는 1단계를 통과합니다.
 - NCIC는 학년군 단위(중1~3, 고1~3 공통/선택)라 같은 학교급 안의 학년 차이는 규칙으로 구분하지 못합니다.
 - 키워드 추출이 조사를 떼지 않아서("이차함수를") 매칭이 0건이 되면 LLM 판정으로 넘어갑니다(호출 +1).
+
+# 확장: 선택형 입력 폼 + 수정 대상 선택 (2026-11-14)
+
+토의·토론 Activity(한국어·US 둘 다)에만 적용했습니다. Quiz는 아직 채팅 입력 그대로입니다.
+
+## 27. 무엇을 바꿨나
+
+- **처음 입력**: 과목 → 학년 → 주제를 채팅으로 세 번 묻던 것을, 한 화면의 폼(과목·학년은 목록에서 선택, 주제는 자유 입력)으로 바꿨습니다.
+- **수정 대상**: 활동지가 있으면 채팅창 위에 [수업계획안] / [학생 활동지] 선택지를 두고, 사용자가 고른 쪽만 고칩니다.
+- 채팅은 되묻기(CLARIFYING, 26-3)와 수정 단계에서만 씁니다.
+
+### 27-1. 왜: 값의 범위가 정해진 입력은 구조화된 UI로, 열린 입력만 자연어로
+
+과목과 학년은 고를 수 있는 값이 정해져 있습니다. 이걸 자유 텍스트로 받으면 정규식이 알아들을 수 있게 써야 하고(학교급 없이 "3학년"이라고 하면 재질문, 8-4), 끝내 못 알아들으면 `DEFAULT_GRADE`(고1 / US는 8학년)로 조용히 채워지는 폴백이 있었습니다. 사용자 모르게 다른 학년으로 생성될 수 있는 경로입니다. 폼은 데이터셋이 바로 쓰는 표기("중2", "8")만 넘기므로 이 세 가지(정규식 추출, 재질문, 폴백)가 이 경로에서는 생기지 않습니다.
+
+반대로 **주제와 수정 요청은 범위가 열려 있어서** 자연어로 남겼습니다. 주제가 과목·학년과 맞는지는 여전히 판정이 필요하므로 26번의 정합성 판정과 되묻기는 그대로 씁니다.
+
+참고로 LLM 호출 수는 바뀌지 않습니다. 슬롯 추출은 처음부터 규칙 기반이라 LLM을 쓰지 않았기 때문입니다.
+
+### 27-2. 설계: 상태 기계는 그대로, 입구만 하나 추가
+
+`ConversationState.start_from_form(subject, grade, topic)`이 슬롯 세 개를 한 번에 채우고, 채팅 경로가 마지막 슬롯을 채운 뒤 부르던 `_advance_and_get_reply()`를 그대로 호출해 READY로 넘어갑니다. 그래서 READY 이후의 흐름(정합성 판정 → 되묻기 → 생성 → 수정 전파)은 입력이 폼에서 왔는지 채팅에서 왔는지 모릅니다. 기존 `handle_message()`의 COLLECTING 경로는 지우지 않았습니다(테스트된 코드를 건드리지 않음 — 18-7과 같은 원칙).
+
+학년을 "학교급 + 학년" 두 칸으로 나누지 않고 목록 하나(초1~고3 12개 / US는 K~12)로 둔 이유: `st.form` 안의 위젯은 제출 전까지 서로 반응하지 않아서, 학교급을 바꿔도 학년 선택지(초 1~6 / 중·고 1~3)가 따라 바뀌지 않습니다. 두 칸이면 "중학교 6학년" 같은 조합을 막을 수 없습니다.
+
+### 27-3. 수정 대상 직접 선택
+
+13-3-1의 키워드 분류는 "활동지"라는 단어가 메시지에 있어야만 활동지를 고쳤습니다. "질문을 더 쉽게 바꿔줘"처럼 활동지를 말하면서 그 단어를 안 쓰면 계획안이 다시 만들어졌습니다. 대상이 둘뿐이라 추측(키워드든 LLM 분류든)보다 사용자에게 고르게 하는 쪽이 정확하고 비용도 없어서 라디오 선택지로 바꿨습니다.
+
+구현에서 한 가지 함정: Streamlit은 그 실행(run)에서 그려지지 않은 위젯의 값을 지웁니다. 수정 처리 단계(REVISING)에서는 라디오가 화면에 없어서, 그대로 두면 처리하는 순간 선택값이 사라집니다. 그래서 메시지를 제출하는 순간 선택값을 별도 키(`discussion_edit_target_pending`)로 옮겨두고 REVISING에서 꺼내 씁니다. 마지막 선택은 다음 수정 때 기본값으로 다시 보여줍니다.
+
+[수업계획안]을 골라도 계획안 수정이 활동지가 읽는 필드를 바꾸면 활동지는 기존대로 자동 재생성됩니다(`worksheet_needs_update()`, 13-3). 선택지는 "어느 문서에 수정 요청을 직접 보낼지"만 정하고, 문서 간 일관성 유지는 그대로입니다.
+
+### 27-4. `classify_edit_target()` 삭제
+
+두 화면(한국어·US) 모두 선택지를 쓰게 되면서 키워드 분류 함수는 호출하는 곳이 없어졌습니다. 함수, 키워드 목록, 테스트 6개를 지우고, `src/edit_propagation.py` 맨 위 설명에 왜 지웠는지를 남겼습니다.
+
+### 27-5. 검증과 한계
+
+- 화면 테스트(Streamlit `AppTest`)로 폼 입력 → 생성, 빈칸 제출 시 생성 안 함, 되묻기 흐름, [학생 활동지]를 고르면 "활동지"라는 단어 없이도 활동지만 수정되고 계획안은 다시 만들지 않음, 활동지가 없으면 선택지가 안 보임을 확인합니다(`tests/test_chat_app_topic_check.py`, `tests/test_chat_app_demo.py`). 2026-11-14 로컬 실행 기준 전체 342개 통과.
+- 실제 사용자에게서 입력 실패가 줄었는지는 아직 측정하지 않았습니다.
+- 한 번의 요청으로 계획안과 활동지를 동시에 직접 고칠 수는 없습니다(15번).
+- Quiz는 아직 채팅 입력입니다.
 
 ---
 

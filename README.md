@@ -1,6 +1,6 @@
 # class-prep-agent
 
-**An AI agent that drafts curriculum-grounded lesson plans, student worksheets, and quizzes through a chat, and keeps them consistent as you revise.**
+**An AI agent that drafts curriculum-grounded lesson plans, student worksheets, and quizzes, takes revisions in a chat, and keeps them consistent as you revise.**
 
 **Live demo:** https://class-prep-agent.streamlit.app (English · Common Core Math, no sign-up)
 
@@ -13,11 +13,11 @@
 
 ## What it does
 
-A teacher, TA, or tutor tells the agent a subject, grade, and topic in a chat. The agent then:
+A teacher, TA, or tutor picks a subject and grade and types a topic in a short form (the quiz still asks for these in the chat). The agent then:
 
 1. **Generates a discussion-based lesson plan** (8 sections: objectives, background reading, key concepts, discussion issues, lesson flow, sample worksheet, rubric) **citing matching curriculum standards** (Common Core Math, or Korea's 2022 national curriculum).
 2. **Revises it from chat messages** ("make the lesson flow fit a 30-minute class").
-3. **Builds a matching student worksheet**, and **regenerates it automatically when a plan edit affects it**, so the two documents stay consistent.
+3. **Builds a matching student worksheet**, and **regenerates it automatically when a plan edit affects it**, so the two documents stay consistent. The user picks whether a chat revision goes to the plan or the worksheet.
 4. **Generates a 5-question multiple-choice quiz** with an answer key, checked by code and by a second LLM review pass.
 
 Results can be downloaded (.md / .txt). Run locally with your own accounts, and the same flows also write to **Notion** (lesson plan), **Google Docs** (worksheet), and **Google Forms** (auto-graded quiz).
@@ -26,8 +26,8 @@ Results can be downloaded (.md / .txt). Run locally with your own accounts, and 
 
 ```mermaid
 flowchart TD
-    U[User chat] --> UI[chat_app.py<br/>Streamlit UI]
-    UI --> CS[conversation.py<br/>slot-filling state machine<br/>subject → grade → topic → drafted ⇄ revising]
+    U[User: input form + chat] --> UI[chat_app.py<br/>Streamlit UI]
+    UI --> CS[conversation.py<br/>state machine<br/>collecting → ready → drafted ⇄ revising]
     CS --> GEN{Generators}
     GEN --> LP[lesson_plan.py]
     GEN --> WS[worksheet.py]
@@ -54,8 +54,14 @@ When a plan is revised, should the worksheet be regenerated? The worksheet promp
 **A hand-written MCP client for Notion; REST for Google.**
 `NotionMCPClient` talks to the official Notion MCP server over stdio using the Python `mcp` SDK. Working against the real server surfaced things the docs didn't mention: tool names carry an `API-` prefix, and validation errors come back inside a successful response (`isError` is not set), so the writer checks the response body too. Google Docs/Forms use the REST API instead: there is no Forms MCP server, and the Docs MCP preview had no create-document tool. → [`src/mcp_client.py`](src/mcp_client.py), [`src/notion_writer.py`](src/notion_writer.py)
 
+**A form for values with a fixed range, natural language only for open input.**
+The discussion flow used to ask for subject, grade, and topic in three chat turns. Subject and grade have a fixed set of values, so typing them only added ways to fail: a regex had to recognize the answer, unrecognized answers were re-asked, and a grade that was never recognized silently fell back to a default. They are now picked from lists, and the form passes the exact labels the curriculum data uses. The topic and revision requests stay free text because their range is open. `start_from_form()` fills all three slots and then calls the same step the chat path ends with, so everything after it (topic check, generation, edit propagation) is unchanged. This did not change the number of LLM calls, because slot extraction was rule-based all along. → [`src/conversation.py`](src/conversation.py)
+
+**Let the user pick the revision target instead of guessing it.**
+Chat revisions used to be routed to the worksheet only if the message contained the word "worksheet", so "make the questions easier" regenerated the lesson plan. With only two targets, a radio button is exact and free, so the keyword classifier was removed. One Streamlit detail: a widget that is not drawn in a run loses its value, and the radio is not drawn while a revision is processed, so the choice is copied out when the message is submitted. → [`chat_app.py`](chat_app.py)
+
 **Check that subject, grade and topic fit before generating — rules first, LLM only when rules can't tell.**
-The chat collects subject → grade → topic one at a time, and nothing checked that they fit together: "quadratic functions" for Grade 1 was generated anyway, and a topic with no matching standard was generated without telling the user. Literal keyword matching can't decide this alone: a valid topic worded differently from the standards also gets zero matches. So `check_topic()` passes immediately when standards match (no extra call), and only for zero matches gathers evidence from other grades/subjects and asks the LLM for a verdict. The verdict is validated, never displayed: suggested grades and subjects must parse with the chat's own slot extractors, and every sentence the user sees comes from a template. → [`src/topic_check.py`](src/topic_check.py)
+Nothing used to check that subject, grade and topic fit together: "quadratic functions" for Grade 1 was generated anyway, and a topic with no matching standard was generated without telling the user. Literal keyword matching can't decide this alone: a valid topic worded differently from the standards also gets zero matches. So `check_topic()` passes immediately when standards match (no extra call), and only for zero matches gathers evidence from other grades/subjects and asks the LLM for a verdict. The verdict is validated, never displayed: suggested grades and subjects must parse with the chat's own slot extractors, and every sentence the user sees comes from a template. → [`src/topic_check.py`](src/topic_check.py)
 
 **Separate the error the user reads from the reason the model reads.**
 A failed quiz once showed the review LLM's reasoning as its error message, because one string served as both the retry-prompt feedback and the on-screen message. Generation errors now carry both: `str(e)` for retry prompts and logs, `e.user_message` for the screen. Quota and outage errors are not retried, since a retry fails the same way. → [`src/errors.py`](src/errors.py)
@@ -98,7 +104,7 @@ python -m streamlit run chat_app.py
 - The full Notion + Google Docs + Google Forms setup is described in [`README.ko.md`](README.ko.md) §7, §12, §17 (Korean).
 - `app.py` is a separate tool: natural-language search and summarization over a Notion workspace via MCP.
 
-**Tests:** `python -m pytest`. 328 tests run on mocked LLM calls and fake data (no API key, network, or credit needed), including a Streamlit `AppTest` that drives the full demo flow end to end.
+**Tests:** `python -m pytest`. 342 tests run on mocked LLM calls and fake data (no API key, network, or credit needed), including a Streamlit `AppTest` that drives the full demo flow end to end.
 
 ## Project structure
 
@@ -130,6 +136,7 @@ tests/
 - The public demo does not write to Notion/Google; that needs per-user OAuth.
 - Usage metrics count browser sessions, not people, and cannot measure return visits.
 - The topic check's LLM verdicts have only been measured once: 6 of 8 reference cases matched the expected verdict (local run, `claude-sonnet-5`, `python scripts/check_topic_live.py`); the demo's model (Haiku 5.5) is untested. Details in README.ko.md §26-5. A broad topic that still matches standards (Grade 9 "algebra") passes the check.
+- One revision request can target the lesson plan or the worksheet, not both at once (a plan edit that changes what the worksheet reads still regenerates the worksheet). The quiz still collects its inputs in the chat.
 - A quiz revision that names a question by number ("make question 3 easier") can reorder questions instead of editing that one in place.
 
 ## Origin
