@@ -448,6 +448,11 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
 # 범위가 열린 주제만 자유 입력으로 둔다. 학년을 학교급/학년 두 칸으로 나누지 않은
 # 이유: st.form 안의 위젯은 제출 전까지 서로 반응하지 않아서, 학교급을 바꿔도
 # 학년 선택지(초 1~6 / 중·고 1~3)가 따라 바뀌지 않는다.
+# 수정 대상 선택(2026-11-14). 위젯 키 / 제출 시점에 옮겨두는 값 / 다음에 기본으로 보여줄 마지막 선택.
+EDIT_TARGET_KEY = "discussion_edit_target"
+EDIT_TARGET_PENDING_KEY = "discussion_edit_target_pending"
+EDIT_TARGET_LAST_KEY = "discussion_edit_target_last"
+
 GRADE_OPTIONS_KO = [f"{level}{n}" for level, top in (("초", 6), ("중", 3), ("고", 3)) for n in range(1, top + 1)]
 
 
@@ -497,6 +502,12 @@ def _render_discussion_activity() -> None:
 
     user_input = st.chat_input("메시지를 입력하세요", key="discussion_chat_input")
     if user_input:
+        if conv.phase == Phase.DRAFTED:
+            # 2026-11-14: 수정 대상을 사용자가 고른 값으로 정한다. 라디오 위젯은
+            # REVISING 단계에선 그려지지 않아 상태가 사라지므로, 제출 시점에 따로 옮겨둔다.
+            target = st.session_state.get(EDIT_TARGET_KEY, "plan") if _has_worksheet(conv) else "plan"
+            st.session_state[EDIT_TARGET_PENDING_KEY] = target
+            st.session_state[EDIT_TARGET_LAST_KEY] = target
         with st.chat_message("user"):
             st.write(user_input)
         reply = conv.handle_message(user_input)
@@ -515,8 +526,10 @@ def _render_discussion_activity() -> None:
     # --- REVISING: 계획안 수정인지 활동지 수정인지 구분해서 처리 ---
     if conv.phase == Phase.REVISING:
         revision_request = conv.slots.get("revision_request", "")
-        target = classify_edit_target(revision_request, has_worksheet=_has_worksheet(conv))
-        if target == "worksheet":
+        # 2026-11-14: 키워드 추측(classify_edit_target) 대신 사용자가 고른 대상을 쓴다.
+        # "질문을 쉽게 바꿔줘"처럼 '활동지'라는 단어 없이 활동지를 말하는 경우를 놓치지 않게.
+        target = st.session_state.pop(EDIT_TARGET_PENDING_KEY, "plan")
+        if target == "worksheet" and _has_worksheet(conv):
             if _run_worksheet_revision(conv, revision_request):
                 st.rerun()
         elif _run_generation(conv, revision_request=revision_request):
@@ -609,18 +622,27 @@ def _render_discussion_activity() -> None:
         if st.button("새로 만들기", key="reset"):
             conv.reset()
             conv.history = []  # 폼으로 다시 시작하므로 이전 대화는 지운다
+            st.session_state.pop(EDIT_TARGET_LAST_KEY, None)
             st.rerun()
 
+        if _has_worksheet(conv):
+            st.radio(
+                "채팅 수정 요청을 어디에 반영할까요?",
+                ["plan", "worksheet"],
+                index=1 if st.session_state.get(EDIT_TARGET_LAST_KEY) == "worksheet" else 0,
+                format_func=lambda t: "수업계획안" if t == "plan" else "학생 활동지",
+                horizontal=True,
+                key=EDIT_TARGET_KEY,
+            )
         st.caption(
-            "수정하고 싶은 점이 있으면 위 채팅창에 자유롭게 적어주세요 (예: '토론 쟁점을 3개로 줄여줘', "
+            "수정하고 싶은 점이 있으면 아래 채팅창에 자유롭게 적어주세요 (예: '토론 쟁점을 3개로 줄여줘', "
             "'토론 시간을 20분으로 늘려줘'). "
             + (
-                "활동지에 영향 있는 수정이면 학생 활동지도 자동으로 다시 만들어져요. "
+                "계획안을 고쳤을 때 활동지에 영향이 있으면 학생 활동지도 자동으로 다시 만들어져요. "
                 if DEMO_MODE
                 else "계획안 수정 결과는 Notion에, 활동지에 영향 있는 수정이면 학생 활동지(Google Docs)에도 자동으로 반영돼요. "
             )
-            + "'활동지 난이도를 낮춰줘'처럼 메시지에 "
-            "'활동지'가 들어가면 계획안은 그대로 두고 활동지만 수정해요."
+            + ("'학생 활동지'를 고르면 계획안은 그대로 두고 활동지만 수정해요." if _has_worksheet(conv) else "")
         )
 
 

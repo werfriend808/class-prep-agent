@@ -15,6 +15,7 @@ import src.lesson_plan as lesson_plan
 import src.quiz as quiz
 import src.topic_check as topic_check
 import src.usage as usage
+import src.worksheet as worksheet
 from src.lesson_plan import PLAN_SECTIONS
 
 
@@ -24,6 +25,7 @@ class _Recorder:
         self.quiz_calls: list[dict] = []
         self.judge_prompts: list[str] = []
         self.verdict: dict = {"verdict": "ok"}
+        self.worksheet_calls: list[str | None] = []
 
     def plan(self, subject, topic, grade="고1", revision_request=None, locale="ko", **_):
         self.plan_calls.append({"subject": subject, "grade": grade, "topic": topic})
@@ -41,6 +43,10 @@ class _Recorder:
             "questions": [{"question": "문항", "options": ["가", "나"], "correct_index": 0, "explanation": "해설"}],
         }
 
+    def worksheet(self, plan, revision_request=None, locale="ko"):
+        self.worksheet_calls.append(revision_request)
+        return {"topic": plan["topic"], "subject": plan["subject"], "grade": plan["grade"], "locale": locale}
+
     def judge(self, prompt, max_tokens=1000):
         self.judge_prompts.append(prompt)
         return json.dumps(self.verdict, ensure_ascii=False)
@@ -54,6 +60,7 @@ def demo_ko(monkeypatch):
     monkeypatch.setattr(lesson_plan, "generate_lesson_plan", rec.plan)
     monkeypatch.setattr(quiz, "generate_quiz", rec.quiz)
     monkeypatch.setattr(topic_check, "complete", rec.judge)
+    monkeypatch.setattr(worksheet, "generate_worksheet", rec.worksheet)
     monkeypatch.setattr(usage, "sink", lambda row: None)
     return rec
 
@@ -185,3 +192,39 @@ def test_form_requires_all_fields(demo_ko):
     assert not at.exception
     assert demo_ko.plan_calls == []
     assert any("모두 입력" in w.value for w in at.warning)
+
+
+# --- 2026-11-14: 수정 대상 직접 선택 ---
+
+def _plan_with_worksheet(demo_ko) -> AppTest:
+    at = _start()
+    _fill_form(at, "수학", "중3", "이차함수")
+    _click(at, "학생 활동지도 만들기")
+    assert not at.exception
+    assert demo_ko.worksheet_calls == [None]
+    return at
+
+
+def test_worksheet_target_revises_worksheet_without_the_word(demo_ko):
+    # '활동지'라는 단어가 없어도 사용자가 고른 대상(활동지)만 고친다 — 예전 키워드 분류는 계획안으로 보냈다.
+    at = _plan_with_worksheet(demo_ko)
+    at.radio(key="discussion_edit_target").set_value("worksheet")
+    _chat(at, "질문을 더 쉽게 바꿔줘")
+    assert not at.exception
+    assert demo_ko.worksheet_calls == [None, "질문을 더 쉽게 바꿔줘"]
+    assert len(demo_ko.plan_calls) == 1  # 계획안은 다시 만들지 않는다
+    assert at.radio(key="discussion_edit_target").value == "worksheet"  # 마지막 선택 유지
+
+
+def test_plan_is_the_default_target(demo_ko):
+    at = _plan_with_worksheet(demo_ko)
+    _chat(at, "토론 시간을 20분으로 늘려줘")
+    assert not at.exception
+    assert len(demo_ko.plan_calls) == 2
+    assert demo_ko.worksheet_calls[1:] in ([], [None])  # 활동지는 전파가 필요할 때만 다시 만든다
+
+
+def test_no_target_choice_before_worksheet_exists(demo_ko):
+    at = _start()
+    _fill_form(at, "수학", "중3", "이차함수")
+    assert not any(r.key == "discussion_edit_target" for r in at.radio)
