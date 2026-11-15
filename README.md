@@ -13,7 +13,7 @@
 
 ## What it does
 
-A teacher, TA, or tutor picks a subject and grade and types a topic in a short form (the quiz still asks for these in the chat). The agent then:
+A teacher, TA, or tutor picks a subject and grade and types a topic in a short form. The agent then:
 
 1. **Generates a discussion-based lesson plan** (8 sections: objectives, background reading, key concepts, discussion issues, lesson flow, sample worksheet, rubric) **citing matching curriculum standards** (Common Core Math, or Korea's 2022 national curriculum).
 2. **Revises it from chat messages** ("make the lesson flow fit a 30-minute class").
@@ -136,7 +136,7 @@ tests/
 - The public demo does not write to Notion/Google; that needs per-user OAuth.
 - Usage metrics count browser sessions, not people, and cannot measure return visits.
 - The topic check's LLM verdicts have only been measured once: 6 of 8 reference cases matched the expected verdict (local run, `claude-sonnet-5`, `python scripts/check_topic_live.py`); the demo's model (Haiku 5.5) is untested. Details in README.ko.md §26-5. A broad topic that still matches standards (Grade 9 "algebra") passes the check.
-- One revision request can target the lesson plan or the worksheet, not both at once (a plan edit that changes what the worksheet reads still regenerates the worksheet). The quiz still collects its inputs in the chat.
+- One revision request can target the lesson plan or the worksheet, not both at once (a plan edit that changes what the worksheet reads still regenerates the worksheet).
 - A quiz revision that names a question by number ("make question 3 easier") can reorder questions instead of editing that one in place.
 
 ## Origin
