@@ -279,6 +279,30 @@ class ConversationState(_ClarificationMixin):
     def _record(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
 
+    def start_from_form(self, subject: str, grade: str, topic: str) -> str:
+        """입력 폼에서 과목·학년·주제를 한 번에 받아 READY로 넘어간다.
+
+        2026-11-14: 과목·학년은 값의 범위가 정해져 있어서 chat_app이 선택형 폼으로
+        받는다. 폼은 데이터셋이 바로 알아듣는 표기("중2", "8", NCIC/Common Core
+        과목명)만 넘기므로 extract_subject()/extract_grade()를 거치지 않는다 —
+        덕분에 "과목을 인식하지 못했어요" 재질문과 DEFAULT_GRADE 폴백이 이
+        경로에서는 생기지 않는다. 주제는 범위가 열려 있어 자유 입력 그대로 받고,
+        정합성 판정(topic_check)은 READY 이후 chat_app이 기존대로 한다.
+
+        handle_message()의 COLLECTING 경로는 그대로 남겨둔다(테스트된 코드라
+        건드리지 않고, 입력 경로만 하나 더 생기는 것).
+        """
+        topic = topic.strip()
+        if not subject or not grade or not topic:
+            raise ValueError("subject, grade, topic are all required")
+        self.slots.update({"subject": subject, "grade": grade, "topic": topic})
+        if self.locale == "us":
+            summary = f"Subject: {subject} / Grade: {grade} / Topic: {topic}"
+        else:
+            summary = f"과목: {subject} / 학년: {grade} / 주제: {topic}"
+        self._record("user", summary)
+        return self._advance_and_get_reply()
+
     def handle_message(self, message: str) -> str:
         """사용자 메시지 하나를 처리하고, 챗봇이 다음에 보여줄 응답 문자열을 반환한다.
 
