@@ -70,6 +70,14 @@ def _chat(at: AppTest, *messages: str) -> None:
         at.chat_input[0].set_value(text).run()
 
 
+def _fill_form(at: AppTest, subject: str, grade: str, topic: str) -> None:
+    """토의·토론(한국어) 입력 폼을 채우고 제출한다 (2026-11-14부터 채팅 대신 폼)."""
+    at.selectbox(key="discussion_form_subject").set_value(subject)
+    at.selectbox(key="discussion_form_grade").set_value(grade)
+    at.text_input(key="discussion_form_topic").input(topic)
+    _click(at, "수업계획안 만들기")
+
+
 def _assistant_texts(at: AppTest) -> list[str]:
     return [m.markdown[0].value for m in at.chat_message if m.name == "assistant" and m.markdown]
 
@@ -80,7 +88,7 @@ def _click(at: AppTest, label: str) -> None:
 
 def test_matched_topic_generates_without_judge_call(demo_ko):
     at = _start()
-    _chat(at, "수학", "중학교 3학년", "이차함수")
+    _fill_form(at, "수학", "중3", "이차함수")
     assert not at.exception
     assert len(demo_ko.plan_calls) == 1
     assert demo_ko.judge_prompts == []  # 성취기준이 있으면 추가 LLM 호출 없음
@@ -90,7 +98,7 @@ def test_matched_topic_generates_without_judge_call(demo_ko):
 def test_wrong_grade_asks_before_generating_and_button_switches_grade(demo_ko):
     demo_ko.verdict = {"verdict": "other_grade", "suggested_grade": "중3", "narrower_topics": ["덧셈과 뺄셈"]}
     at = _start()
-    _chat(at, "수학", "초등학교 1학년", "이차함수")
+    _fill_form(at, "수학", "초1", "이차함수")
     assert not at.exception
     assert demo_ko.plan_calls == []  # 생성하지 않고 되묻는다
     assert "중학교 3학년에서 배우는 내용" in _assistant_texts(at)[-1]
@@ -107,7 +115,7 @@ def test_symptom1_unmatched_plan_is_labelled_when_user_proceeds(demo_ko):
     # 실제 데모 증상 1: 도덕 중2 "성선설 성악설" — 이제 먼저 묻고, 그대로 진행하면 근거 없음을 표시한다.
     demo_ko.verdict = {"verdict": "other_grade", "suggested_grade": "고2"}
     at = _start()
-    _chat(at, "도덕", "중학교 2학년", "성선설 성악설")
+    _fill_form(at, "도덕", "중2", "성선설 성악설")
     assert demo_ko.plan_calls == []
     _click(at, "그대로 만들기")
     assert not at.exception
@@ -118,7 +126,7 @@ def test_symptom1_unmatched_plan_is_labelled_when_user_proceeds(demo_ko):
 def test_valid_but_unmatched_topic_is_not_blocked(demo_ko):
     demo_ko.verdict = {"verdict": "ok"}
     at = _start()
-    _chat(at, "국어", "고등학교 1학년", "고전시가")
+    _fill_form(at, "국어", "고1", "고전시가")
     assert len(demo_ko.plan_calls) == 1
     assert any("성취기준 근거 없이" in i.value for i in at.info)
 
@@ -168,3 +176,12 @@ def test_us_locale_wrong_grade_flow(demo_ko, monkeypatch):
     _click(at, "Switch to Grade 9")
     assert not at.exception
     assert demo_ko.plan_calls == [{"subject": "Math", "grade": "9", "topic": "quadratic functions"}]
+
+
+def test_form_requires_all_fields(demo_ko):
+    at = _start()
+    at.selectbox(key="discussion_form_subject").set_value("수학")
+    _click(at, "수업계획안 만들기")  # 학년·주제 비움
+    assert not at.exception
+    assert demo_ko.plan_calls == []
+    assert any("모두 입력" in w.value for w in at.warning)

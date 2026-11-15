@@ -443,23 +443,57 @@ def _run_worksheet_revision(conv: ConversationState, revision_request: str) -> b
     return True
 
 
+# 2026-11-14: 토의·토론 입력 폼. 과목·학년은 값의 범위가 정해져 있어 선택형으로
+# 받고(데이터셋 표기 그대로 넘겨서 정규식 추출·재질문·DEFAULT_GRADE 폴백을 건너뜀),
+# 범위가 열린 주제만 자유 입력으로 둔다. 학년을 학교급/학년 두 칸으로 나누지 않은
+# 이유: st.form 안의 위젯은 제출 전까지 서로 반응하지 않아서, 학교급을 바꿔도
+# 학년 선택지(초 1~6 / 중·고 1~3)가 따라 바뀌지 않는다.
+GRADE_OPTIONS_KO = [f"{level}{n}" for level, top in (("초", 6), ("중", 3), ("고", 3)) for n in range(1, top + 1)]
+
+
+def _render_discussion_form() -> None:
+    conv: ConversationState = st.session_state.conv
+    with st.form("discussion_form"):
+        subject = st.selectbox(
+            "과목", get_provider("ncic").subjects(), index=None,
+            placeholder="과목을 고르세요", key="discussion_form_subject",
+        )
+        grade = st.selectbox(
+            "학년", GRADE_OPTIONS_KO, index=None, format_func=lambda g: grade_label(g, "ko"),
+            placeholder="학년을 고르세요", key="discussion_form_grade",
+        )
+        topic = st.text_input(
+            "토의·토론 주제", placeholder="예: 환경 보전과 개발 중 무엇을 우선해야 하는가",
+            key="discussion_form_topic",
+        )
+        submitted = st.form_submit_button("수업계획안 만들기")
+    if submitted:
+        if not subject or not grade or not topic.strip():
+            st.warning("과목, 학년, 주제를 모두 입력해주세요.")
+            return
+        conv.start_from_form(subject, grade, topic)
+        st.rerun()
+
+
 def _render_discussion_activity() -> None:
     if "conv" not in st.session_state:
         st.session_state.conv = ConversationState()
-        st.session_state.conv.history.append(
-            {"role": "assistant", "content": st.session_state.conv.next_question()}
-        )
     conv: ConversationState = st.session_state.conv
 
     st.caption(
-        f"과목({', '.join(get_provider('ncic').subjects())}), 학년, 주제를 알려주시면 국가교육과정(NCIC) 성취기준에 "
-        "근거한 토의·토론 수업계획안을 만들고 Notion에 자동으로 저장해드려요. 생성 후에도 채팅으로 "
-        "계속 수정을 요청할 수 있고, 원하면 학생 활동지도 만들어서 Google Docs에 저장할 수 있어요."
+        "과목, 학년, 주제를 정하면 국가교육과정(NCIC) 성취기준에 근거한 토의·토론 수업계획안을 "
+        "만들고 Notion에 자동으로 저장해드려요. 생성 후에는 채팅으로 계속 수정을 요청할 수 있고, "
+        "원하면 학생 활동지도 만들어서 Google Docs에 저장할 수 있어요."
     )
 
     for msg in conv.history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+
+    # 입력 단계(COLLECTING)는 폼으로 받고, 채팅창은 되묻기(CLARIFYING)와 수정 단계에서만 쓴다.
+    if conv.phase == Phase.COLLECTING:
+        _render_discussion_form()
+        return
 
     user_input = st.chat_input("메시지를 입력하세요", key="discussion_chat_input")
     if user_input:
@@ -574,7 +608,7 @@ def _render_discussion_activity() -> None:
         st.divider()
         if st.button("새로 만들기", key="reset"):
             conv.reset()
-            conv.history.append({"role": "assistant", "content": conv.next_question()})
+            conv.history = []  # 폼으로 다시 시작하므로 이전 대화는 지운다
             st.rerun()
 
         st.caption(
