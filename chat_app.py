@@ -456,28 +456,41 @@ EDIT_TARGET_LAST_KEY = "discussion_edit_target_last"
 GRADE_OPTIONS_KO = [f"{level}{n}" for level, top in (("초", 6), ("중", 3), ("고", 3)) for n in range(1, top + 1)]
 
 
-def _render_discussion_form() -> None:
-    conv: ConversationState = st.session_state.conv
-    with st.form("discussion_form"):
+def _render_input_form(conv, *, locale: str, key_prefix: str, topic_label: str,
+                       topic_placeholder: str, submit_label: str) -> None:
+    """토의·토론·Quiz 공통 입력 폼 (2026-11-14). 두 Activity 모두 과목/학년/주제 슬롯이 같아서
+    라벨과 위젯 키만 바꿔 하나로 쓴다. 키는 f"{key_prefix}_form_subject" (+ US는 "_us")."""
+    is_us = locale == "us"
+    sfx = "_us" if is_us else ""
+    subjects = get_provider("common_core_math" if is_us else "ncic").subjects()
+    grades = GRADE_OPTIONS_US if is_us else GRADE_OPTIONS_KO
+    with st.form(f"{key_prefix}_form{sfx}"):
         subject = st.selectbox(
-            "과목", get_provider("ncic").subjects(), index=None,
-            placeholder="과목을 고르세요", key="discussion_form_subject",
+            "Subject" if is_us else "과목", subjects, index=0 if len(subjects) == 1 else None,
+            placeholder="Choose a subject" if is_us else "과목을 고르세요",
+            key=f"{key_prefix}_form_subject{sfx}",
         )
         grade = st.selectbox(
-            "학년", GRADE_OPTIONS_KO, index=None, format_func=lambda g: grade_label(g, "ko"),
-            placeholder="학년을 고르세요", key="discussion_form_grade",
+            "Grade" if is_us else "학년", grades, index=None, format_func=lambda g: grade_label(g, locale),
+            placeholder="Choose a grade" if is_us else "학년을 고르세요",
+            key=f"{key_prefix}_form_grade{sfx}",
         )
-        topic = st.text_input(
-            "토의·토론 주제", placeholder="예: 환경 보전과 개발 중 무엇을 우선해야 하는가",
-            key="discussion_form_topic",
-        )
-        submitted = st.form_submit_button("수업계획안 만들기")
+        topic = st.text_input(topic_label, placeholder=topic_placeholder, key=f"{key_prefix}_form_topic{sfx}")
+        submitted = st.form_submit_button(submit_label)
     if submitted:
         if not subject or not grade or not topic.strip():
-            st.warning("과목, 학년, 주제를 모두 입력해주세요.")
+            st.warning("Please fill in the subject, grade, and topic." if is_us else "과목, 학년, 주제를 모두 입력해주세요.")
             return
         conv.start_from_form(subject, grade, topic)
         st.rerun()
+
+
+def _render_discussion_form() -> None:
+    _render_input_form(
+        st.session_state.conv, locale="ko", key_prefix="discussion",
+        topic_label="토의·토론 주제", topic_placeholder="예: 환경 보전과 개발 중 무엇을 우선해야 하는가",
+        submit_label="수업계획안 만들기",
+    )
 
 
 def _render_discussion_activity() -> None:
@@ -760,28 +773,11 @@ EDIT_TARGET_LAST_KEY_US = "discussion_edit_target_last_us"
 
 
 def _render_discussion_form_us() -> None:
-    conv: ConversationState = st.session_state.conv_us
-    subjects = get_provider("common_core_math").subjects()
-    with st.form("discussion_form_us"):
-        subject = st.selectbox(
-            "Subject", subjects, index=0 if len(subjects) == 1 else None,
-            placeholder="Choose a subject", key="discussion_form_subject_us",
-        )
-        grade = st.selectbox(
-            "Grade", GRADE_OPTIONS_US, index=None, format_func=lambda g: grade_label(g, "us"),
-            placeholder="Choose a grade", key="discussion_form_grade_us",
-        )
-        topic = st.text_input(
-            "Discussion topic", placeholder="e.g. Is it fair to round numbers when splitting a bill?",
-            key="discussion_form_topic_us",
-        )
-        submitted = st.form_submit_button("Create lesson plan")
-    if submitted:
-        if not subject or not grade or not topic.strip():
-            st.warning("Please fill in the subject, grade, and topic.")
-            return
-        conv.start_from_form(subject, grade, topic)
-        st.rerun()
+    _render_input_form(
+        st.session_state.conv_us, locale="us", key_prefix="discussion",
+        topic_label="Discussion topic", topic_placeholder="e.g. Is it fair to round numbers when splitting a bill?",
+        submit_label="Create lesson plan",
+    )
 
 
 def _render_discussion_activity_us() -> None:
@@ -1010,13 +1006,10 @@ def _run_quiz_generation(quiz_conv: QuizConversationState, revision_request: str
 def _render_quiz_activity() -> None:
     if "quiz_conv" not in st.session_state:
         st.session_state.quiz_conv = QuizConversationState()
-        st.session_state.quiz_conv.history.append(
-            {"role": "assistant", "content": st.session_state.quiz_conv.next_question()}
-        )
     quiz_conv: QuizConversationState = st.session_state.quiz_conv
 
     st.caption(
-        f"과목({', '.join(get_provider('ncic').subjects())}), 학년, 확인하고 싶은 단원/주제를 알려주시면 "
+        "과목, 학년, 확인하고 싶은 단원/주제를 정하면 "
         "객관식 퀴즈(기본 4지선다, 보기 개수는 채팅으로 조정 가능)를 만들고 Google Forms에 "
         "자동으로 저장해드려요(정답 자동 채점 포함). 생성 후에도 채팅으로 계속 수정을 요청할 수 있어요."
     )
@@ -1024,6 +1017,15 @@ def _render_quiz_activity() -> None:
     for msg in quiz_conv.history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+
+    # 2026-11-14: 토의·토론과 같이 입력 단계는 폼, 채팅은 되묻기·수정 단계에서만.
+    if quiz_conv.phase == Phase.COLLECTING:
+        _render_input_form(
+            quiz_conv, locale="ko", key_prefix="quiz",
+            topic_label="단원 / 주제", topic_placeholder="예: 삼각형의 내각, 광합성",
+            submit_label="퀴즈 만들기",
+        )
+        return
 
     user_input = st.chat_input("메시지를 입력하세요", key="quiz_chat_input")
     if user_input:
@@ -1079,7 +1081,7 @@ def _render_quiz_activity() -> None:
         st.divider()
         if st.button("새로 만들기", key="quiz_reset"):
             quiz_conv.reset()
-            quiz_conv.history.append({"role": "assistant", "content": quiz_conv.next_question()})
+            quiz_conv.history = []  # 폼으로 다시 시작하므로 이전 대화는 지운다
             st.rerun()
 
         st.caption(
@@ -1146,14 +1148,10 @@ def _run_quiz_generation_us(quiz_conv: QuizConversationState, revision_request: 
 def _render_quiz_activity_us() -> None:
     if "quiz_conv_us" not in st.session_state:
         st.session_state.quiz_conv_us = QuizConversationState(locale="us")
-        st.session_state.quiz_conv_us.history.append(
-            {"role": "assistant", "content": st.session_state.quiz_conv_us.next_question()}
-        )
     quiz_conv: QuizConversationState = st.session_state.quiz_conv_us
 
     st.caption(
-        f"Tell me the subject ({', '.join(get_provider('common_core_math').subjects())}), grade, and the "
-        "unit/topic you want to check, and I'll build a multiple-choice quiz (4 options by default, "
+        "Pick a subject and grade and enter the unit/topic you want to check, and I'll build a multiple-choice quiz (4 options by default, "
         "adjustable via chat)"
         + (" with an answer key you can download. " if DEMO_MODE else " and save it to Google Forms with auto-grading. ")
         + "You can keep asking for revisions in the chat after it's generated."
@@ -1162,6 +1160,14 @@ def _render_quiz_activity_us() -> None:
     for msg in quiz_conv.history:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
+
+    if quiz_conv.phase == Phase.COLLECTING:
+        _render_input_form(
+            quiz_conv, locale="us", key_prefix="quiz",
+            topic_label="Unit / topic", topic_placeholder="e.g. adding fractions, area of triangles",
+            submit_label="Create quiz",
+        )
+        return
 
     user_input = st.chat_input("Type a message", key="quiz_chat_input_us")
     if user_input:
@@ -1217,7 +1223,7 @@ def _render_quiz_activity_us() -> None:
         st.divider()
         if st.button("Start over", key="quiz_reset_us"):
             quiz_conv.reset()
-            quiz_conv.history.append({"role": "assistant", "content": quiz_conv.next_question()})
+            quiz_conv.history = []  # back to the form, so clear the old conversation
             st.rerun()
 
         st.caption(

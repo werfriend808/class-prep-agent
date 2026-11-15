@@ -134,8 +134,10 @@ def test_lesson_plan_flow_in_demo_mode(demo_us):
 def test_quiz_flow_in_demo_mode(demo_us):
     at = AppTest.from_file("../chat_app.py", default_timeout=30).run()
     at.radio(key="activity").set_value("Quiz").run()
-    for msg in ["Math", "Grade 5", "adding fractions"]:
-        _chat(at, msg)
+    # 2026-11-14: Quiz 입력도 폼 (과목은 Math 하나라 미리 선택돼 있다)
+    at.selectbox(key="quiz_form_grade_us").set_value("5")
+    at.text_input(key="quiz_form_topic_us").input("adding fractions")
+    next(b for b in at.button if b.label == "Create quiz").click().run()
     assert not at.exception
     assert not at.error, [e.value for e in at.error]
     assert any("Quiz" in h.value for h in at.subheader)

@@ -151,8 +151,11 @@ def test_quiz_screen_shows_only_the_user_message(monkeypatch):
 
     at = AppTest.from_file("../chat_app.py", default_timeout=30).run()
     at.radio(key="activity").set_value("Quiz").run()
-    for text in ["영어", "고등학교 1학년", "관계대명사 who/which"]:
-        at.chat_input[0].set_value(text).run()
+    # 2026-11-14: Quiz 입력은 채팅 대신 폼
+    at.selectbox(key="quiz_form_subject").set_value("영어")
+    at.selectbox(key="quiz_form_grade").set_value("고1")
+    at.text_input(key="quiz_form_topic").input("관계대명사 who/which")
+    next(b for b in at.button if b.label == "퀴즈 만들기").click().run()
     errors = [e.value for e in at.error]
     assert errors == [final_message("review", "quiz")]
     assert not any("문항 4의 정답" in e for e in errors)

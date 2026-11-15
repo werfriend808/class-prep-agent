@@ -77,12 +77,12 @@ def _chat(at: AppTest, *messages: str) -> None:
         at.chat_input[0].set_value(text).run()
 
 
-def _fill_form(at: AppTest, subject: str, grade: str, topic: str) -> None:
-    """토의·토론(한국어) 입력 폼을 채우고 제출한다 (2026-11-14부터 채팅 대신 폼)."""
-    at.selectbox(key="discussion_form_subject").set_value(subject)
-    at.selectbox(key="discussion_form_grade").set_value(grade)
-    at.text_input(key="discussion_form_topic").input(topic)
-    _click(at, "수업계획안 만들기")
+def _fill_form(at: AppTest, subject: str, grade: str, topic: str, activity: str = "discussion") -> None:
+    """한국어 입력 폼을 채우고 제출한다 (2026-11-14부터 채팅 대신 폼). activity: "discussion" | "quiz"."""
+    at.selectbox(key=f"{activity}_form_subject").set_value(subject)
+    at.selectbox(key=f"{activity}_form_grade").set_value(grade)
+    at.text_input(key=f"{activity}_form_topic").input(topic)
+    _click(at, "수업계획안 만들기" if activity == "discussion" else "퀴즈 만들기")
 
 
 def _assistant_texts(at: AppTest) -> list[str]:
@@ -142,7 +142,7 @@ def test_symptom2_quiz_broad_topic_asks_to_narrow(demo_ko):
     # 실제 데모 증상 2의 입력: Quiz, 영어 고1 "문법".
     demo_ko.verdict = {"verdict": "too_broad", "narrower_topics": ["관계대명사 who/which", "현재완료"]}
     at = _start("Quiz")
-    _chat(at, "영어", "고등학교 1학년", "문법")
+    _fill_form(at, "영어", "고1", "문법", activity="quiz")
     assert demo_ko.quiz_calls == []
     assert "좁혀" in _assistant_texts(at)[-1]
     _click(at, "주제: 관계대명사 who/which")
@@ -154,7 +154,7 @@ def test_symptom2_quiz_broad_topic_asks_to_narrow(demo_ko):
 def test_typed_new_topic_is_checked_again(demo_ko):
     demo_ko.verdict = {"verdict": "too_broad", "narrower_topics": ["현재완료"]}
     at = _start("Quiz")
-    _chat(at, "영어", "고등학교 1학년", "문법")
+    _fill_form(at, "영어", "고1", "문법", activity="quiz")
     _chat(at, "품사 총정리")  # 직접 입력한 주제(성취기준 0건) -> 다시 판정 (여전히 넓다고 하면 다시 묻는다)
     assert demo_ko.quiz_calls == []
     assert len(demo_ko.judge_prompts) == 2
@@ -164,7 +164,7 @@ def test_typed_new_topic_is_checked_again(demo_ko):
 def test_wrong_subject_typed_answer_changes_subject(demo_ko):
     demo_ko.verdict = {"verdict": "other_subject", "suggested_subject": "국어"}
     at = _start("Quiz")
-    _chat(at, "영어", "고등학교 1학년", "고전시가")
+    _fill_form(at, "영어", "고1", "고전시가", activity="quiz")
     assert demo_ko.quiz_calls == []
     demo_ko.verdict = {"verdict": "ok"}
     _chat(at, "국어로 바꿔줘")
